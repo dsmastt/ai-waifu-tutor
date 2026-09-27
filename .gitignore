@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+dist/
+*.local
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Runtime data
+server/data/
+server/cache/
+*.db
+*.db-journal
+*.sqlite3
+
+# Models / assets (fetched by scripts/fetch-assets.sh)
+client/public/models/*.vrm
+client/public/models/*.glb
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
