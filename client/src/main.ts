@@ -37,6 +37,14 @@ const audio = new AudioManager();
 
 let settings: TutorSettings = loadSettings();
 hud.populateSettings(settings);
+applyQuality(settings.quality);
+
+function applyQuality(quality: TutorSettings['quality']): void {
+  const dpr = window.devicePixelRatio || 1;
+  const cap = quality === 'low' ? 1 : quality === 'high' ? 2 : 1.5;
+  world.renderer.setPixelRatio(Math.min(dpr, cap));
+  world.renderer.setSize(viewport.clientWidth, viewport.clientHeight);
+}
 
 // debug handle (test harness + power users)
 (window as unknown as { __wt: unknown }).__wt = { world, character, windows, hud, client, audio };
@@ -192,6 +200,7 @@ hud.onStop = () => {
 hud.onSettings = (s) => {
   settings = s;
   saveSettings(s);
+  applyQuality(s.quality);
   client.sendSettings({ tutor: { ...s } });
 };
 
@@ -204,6 +213,8 @@ windows.onAnswer = (questionId, text) => {
 
 // ------------------------------------------------------------------ loop
 
+let lastTalkGesture = 0;
+
 world.onFrame(({ dt }) => {
   character.update(dt, performance.now() / 1000, world.camera);
   windows.update(viewport.clientHeight);
@@ -214,6 +225,14 @@ world.onFrame(({ dt }) => {
   const vis = audio.tick();
   if (vis) character.setViseme(vis.v, vis.weight);
   else character.setViseme('', 0);
+
+  // natural hand gestures while explaining
+  const now = performance.now() / 1000;
+  if (speaking && now - lastTalkGesture > 7 + Math.random() * 9) {
+    lastTalkGesture = now;
+    character.playGesture('talk');
+  }
+
   if (!speaking && !turnActive) hud.setStatus('idle');
   else if (speaking && turnActive) hud.setStatus('speaking');
 });

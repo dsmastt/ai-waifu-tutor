@@ -47,6 +47,7 @@ class TutorBrain:
         self._interrupt = asyncio.Event()
         self._active: asyncio.Task | None = None
         self._pending_question: dict | None = None
+        self._id_counter = 0
 
     # -- public API ---------------------------------------------------------
 
@@ -85,6 +86,7 @@ class TutorBrain:
             verdict_note = "The submitted answer is CORRECT."
         elif verdict is False:
             verdict_note = "The submitted answer is INCORRECT."
+        self._memory.append_message("user", f"My answer: {answer_text}")
         context = (
             f"The student submitted this answer to question id '{question_id}': "
             f'"{answer_text}".\n'
@@ -167,6 +169,7 @@ class TutorBrain:
         buffer = ""
         spoken_parts: list[str] = []
         spoken_full = ""
+        action_log: list[str] = []
         try:
             while True:
                 item = await queue.get()
@@ -202,8 +205,11 @@ class TutorBrain:
                             break
 
                 elif isinstance(item, ActionEvent):
-                    self._register_question(item.a)
-                    yield {"t": "action", "a": item.a.model_dump()}
+                    action = item.a
+                    self._ensure_action_id(action)
+                    self._register_question(action)
+                    self._log_action(action, action_log)
+                    yield {"t": "action", "a": action.model_dump()}
 
             # flush remainder
             tail = buffer.strip()
@@ -217,11 +223,37 @@ class TutorBrain:
             else:
                 if spoken_full.strip():
                     self._memory.append_message("assistant", spoken_full.strip())
+                if action_log:
+                    self._memory.append_message(
+                        "assistant",
+                        "[Scene state you now have: " + "; ".join(action_log) + "]",
+                    )
                 yield {"t": "turn_end"}
         finally:
             producer.cancel()
             await asyncio.gather(producer, return_exceptions=True)
             self._active = None
+
+    def _ensure_action_id(self, action) -> None:
+        """Assign stable ids to window-creating actions when the LLM omits
+        them, so both sides (and the model's scene-state notes) agree."""
+        from ..protocol import AskQuestionAction, CreateWindowAction
+
+        if isinstance(action, (CreateWindowAction, AskQuestionAction)) and not action.id:
+            self._id_counter += 1
+            action.id = f"w{self._id_counter}"
+
+    @staticmethod
+    def _log_action(action, log: list[str]) -> None:
+        """Compact scene-state note so the LLM can reference its own windows."""
+        from ..protocol import CreateWindowAction
+
+        if isinstance(action, CreateWindowAction) and action.id:
+            w = action.win
+            title = w.title or w.kind
+            log.append(f"window {action.id} ({w.kind} '{title}')")
+        elif action.type == "close_window":
+            log.append(f"closed window {action.id}")
 
     def _register_question(self, action) -> None:
         """Track the latest question the tutor asked, for answer evaluation."""

@@ -77,6 +77,10 @@ export class TutorCharacter {
   private gesture: ActiveGesture | null = null;
   private headOffset = { yaw: 0, pitch: 0, roll: 0 };
 
+  // idle life
+  private idleGestureTimer = 8;
+  private lookAroundTimer = 4;
+
   // breath
   private breathePhase = 0;
 
@@ -194,7 +198,7 @@ export class TutorCharacter {
   playGesture(name: string, target?: THREE.Vector3 | null): void {
     const durations: Record<string, number> = {
       point: 2.4, nod: 1.0, shake: 1.2, wave: 1.6,
-      think: 2.8, shrug: 1.2, clap: 1.4,
+      think: 2.8, shrug: 1.2, clap: 1.4, talk: 1.4,
     };
     this.gesture = {
       name,
@@ -213,12 +217,38 @@ export class TutorCharacter {
   update(dt: number, time: number, camera: THREE.Camera): void {
     if (!this.vrm) return;
     this.updateGaze(dt, time, camera);
+    this.updateIdleLife(dt);
     this.updateBlink(dt, time);
     this.updateBreathing(dt, time);
     this.updateGestures(dt, time);
     this.updateExpressions(dt);
     this.updatePose();
     this.vrm.update(dt);
+  }
+
+  private updateIdleLife(dt: number): void {
+    // periodic random glances
+    this.lookAroundTimer -= dt;
+    if (this.lookAroundTimer <= 0) {
+      const r = Math.random();
+      if (r < 0.4 && this.gazeMode === 'me') {
+        this.gazeMode = 'random';
+        this.lookAroundTimer = 2 + Math.random() * 3;
+      } else {
+        if (this.gazeMode === 'random') this.gazeMode = 'me';
+        this.lookAroundTimer = 5 + Math.random() * 8;
+      }
+    }
+    // subtle idle gestures when not doing anything else
+    if (!this.gesture) {
+      this.idleGestureTimer -= dt;
+      if (this.idleGestureTimer <= 0) {
+        this.idleGestureTimer = 10 + Math.random() * 16;
+        const r = Math.random();
+        if (r < 0.35) this.playGesture('nod');
+        else if (r < 0.55) this.playGesture('talk');
+      }
+    }
   }
 
   private updateGaze(dt: number, time: number, camera: THREE.Camera): void {
@@ -396,6 +426,12 @@ export class TutorCharacter {
         this.armPose('rightUpperArm', 0.5, -1.2, -0.25, e);
         this.armPose('leftLowerArm', 0.2, -0.35 + cl, 0.1, e);
         this.armPose('rightLowerArm', 0.2, -0.35 - cl, -0.1, e);
+        break;
+      }
+      case 'talk': {
+        const bob = Math.sin(t * 5) * 0.1 * e;
+        this.armPose('rightUpperArm', 0.25 + bob * 0.3, -0.55, 0.1, e);
+        this.armPose('rightLowerArm', 0.1, -0.7, 0.05, e);
         break;
       }
       default:

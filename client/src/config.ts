@@ -18,6 +18,7 @@ export interface TutorSettings {
   custom_instructions: string;
   voice: string;
   speed: number;
+  quality: 'low' | 'balanced' | 'high';
 }
 
 export const DEFAULT_SETTINGS: TutorSettings = {
@@ -31,6 +32,7 @@ export const DEFAULT_SETTINGS: TutorSettings = {
   custom_instructions: '',
   voice: 'af_bella',
   speed: 1.0,
+  quality: 'balanced',
 };
 
 export const VOICES = [

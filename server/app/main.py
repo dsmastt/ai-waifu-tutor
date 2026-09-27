@@ -5,9 +5,11 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+from pathlib import Path
 
 from fastapi import FastAPI, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from .config import settings
 from .llm import get_provider
@@ -163,6 +165,12 @@ def main() -> None:
         port=settings.port,
         log_level="info",
     )
+
+
+# Serve the built client in production (npm run build), after all routes.
+_CLIENT_DIST = Path(__file__).resolve().parents[2] / "client" / "dist"
+if _CLIENT_DIST.exists():
+    app.mount("/", StaticFiles(directory=str(_CLIENT_DIST), html=True), name="client")
 
 
 if __name__ == "__main__":

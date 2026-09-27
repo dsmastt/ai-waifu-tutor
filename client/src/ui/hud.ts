@@ -52,6 +52,12 @@ export class HUD {
           <select id="st-voice">${VOICES.map((v) => `<option>${v}</option>`).join('')}</select></div>
         <div class="st-field"><label>Speech speed</label>
           <div class="st-range-row"><input type="range" id="st-speed" min="0.6" max="1.6" step="0.05"><output id="st-speed-out">1.0</output></div></div>
+        <div class="st-field"><label>Graphics quality</label>
+          <select id="st-quality">
+            <option value="low">Low</option>
+            <option value="balanced">Balanced</option>
+            <option value="high">High</option>
+          </select></div>
         <div class="st-field"><label>Learning material (PDF / text)</label>
           <input type="file" id="st-file" accept=".pdf,.txt,.md,.markdown,.csv,.json">
           <div style="display:flex;gap:8px;margin-top:8px">
@@ -118,6 +124,7 @@ export class HUD {
         custom_instructions: this.val('#st-custom'),
         voice: this.val('#st-voice'),
         speed: parseFloat(speed.value),
+        quality: this.val('#st-quality') as TutorSettings['quality'],
       };
       this.onSettings?.(settings);
       this.settingsPanel.classList.add('hidden');
@@ -179,6 +186,7 @@ export class HUD {
     set('#st-length', s.response_length);
     set('#st-custom', s.custom_instructions);
     set('#st-voice', s.voice);
+    set('#st-quality', s.quality ?? 'balanced');
     const speed = this.root.querySelector<HTMLInputElement>('#st-speed')!;
     speed.value = String(s.speed);
     this.root.querySelector('#st-speed-out')!.textContent = String(s.speed);
