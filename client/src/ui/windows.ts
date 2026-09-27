@@ -102,8 +102,9 @@ export class TutorWindow {
         const html = marked.parse(spec.content ?? '') as string;
         this.body.innerHTML = DOMPurify.sanitize(html, {
           ALLOWED_TAGS: ['h1','h2','h3','h4','h5','p','ul','ol','li','strong','em','b','i','u','code','pre','blockquote','br','hr','a','table','thead','tbody','tr','th','td','img','span','del','sub','sup'],
-          ALLOWED_ATTR: ['href', 'src', 'alt', 'title', 'target'],
+          ALLOWED_ATTR: ['href', 'src', 'alt', 'title', 'target', 'class'],
         });
+        void this.renderDiagrams();
         break;
       }
       case 'text': {
@@ -289,6 +290,30 @@ export class TutorWindow {
     this.body.appendChild(root);
   }
 
+  private async renderDiagrams(): Promise<void> {
+    const blocks = this.body.querySelectorAll('code.language-mermaid');
+    if (!blocks.length) return;
+    try {
+      const mermaid = (await import('mermaid')).default;
+      mermaid.initialize({ startOnLoad: false, theme: 'dark', fontFamily: 'inherit' });
+      let i = 0;
+      for (const block of blocks) {
+        const source = block.textContent ?? '';
+        const container = document.createElement('div');
+        container.className = 'wt-diagram';
+        block.parentElement?.replaceWith(container);
+        try {
+          const { svg } = await mermaid.render(`mmd-${this.id}-${i++}`, source);
+          container.innerHTML = DOMPurify.sanitize(svg);
+        } catch {
+          container.textContent = source;
+        }
+      }
+    } catch (err) {
+      console.warn('mermaid failed to load', err);
+    }
+  }
+
   // ------------------------------------------------------------------ interaction
 
   private bindDrag(titlebar: HTMLElement): void {
@@ -379,7 +404,6 @@ const _tmpUp = new THREE.Vector3();
 
 export class WindowManager {
   readonly windows = new Map<string, TutorWindow>();
-  private slots = { left: 0, right: 0, center: 0 };
   private focusedId: string | null = null;
   onAnswer: ((questionId: string, text: string) => void) | null = null;
 
@@ -400,24 +424,37 @@ export class WindowManager {
 
   private placeWindow(win: TutorWindow, position: string): void {
     const side = position === 'center' ? 'center' : position === 'right' ? 'right' : position === 'left' ? 'left' : this.autoSide();
-    const i = this.slots[side as keyof typeof this.slots]++;
+    // compact: reuse the first free slot index on this side
+    let idx = 0;
+    for (const w of this.windows.values()) {
+      const k = (w as TutorWindow & { slot?: { side: string; idx: number } }).slot;
+      if (k && k.side === side && k.idx === idx) {
+        idx++;
+      }
+    }
+    (win as TutorWindow & { slot?: { side: string; idx: number } }).slot = { side, idx };
+
     const pos = new THREE.Vector3();
     if (side === 'left') {
-      const az = 0.95 * Math.PI - i * 0.3;
-      pos.set(Math.sin(az) * 2.05, 1.45 + i * 0.24, Math.cos(az) * 2.05);
+      const az = 0.95 * Math.PI - idx * 0.3;
+      pos.set(Math.sin(az) * 2.05, 1.45 + idx * 0.24, Math.cos(az) * 2.05);
     } else if (side === 'right') {
-      const az = -0.95 * Math.PI + i * 0.3;
-      pos.set(Math.sin(az) * 2.05, 1.45 + i * 0.24, Math.cos(az) * 2.05);
+      const az = -0.95 * Math.PI + idx * 0.3;
+      pos.set(Math.sin(az) * 2.05, 1.45 + idx * 0.24, Math.cos(az) * 2.05);
     } else {
-      const off = i * 0.35 - 0.2;
+      const off = idx * 0.35 - 0.2;
       pos.set(off, 2.5, 1.15);
     }
     win.object.position.copy(pos);
   }
 
   private autoSide(): string {
-    if (this.slots.left === this.slots.right) return 'left';
-    return this.slots.left < this.slots.right ? 'left' : 'right';
+    const left = [...this.windows.values()].filter((w) => {
+      const k = (w as TutorWindow & { slot?: { side: string } }).slot;
+      return k?.side === 'left';
+    }).length;
+    const right = this.windows.size - left;
+    return left <= right ? 'left' : 'right';
   }
 
   close(id: string): void {

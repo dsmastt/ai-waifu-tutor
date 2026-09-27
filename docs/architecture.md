@@ -83,10 +83,11 @@ Server → client: `hello`, `status`, `error`, plus the above. Client → server
 2. ✅ 3D room + VRM character with idle life (blink, breathe, look-at, spring bones).
 3. ✅ End-to-end: message → LLM (mock/deepseek) → TTS + speech + text window.
 4. ✅ Window system: markdown/equation/graph/question/image/table/code/whiteboard,
-   drag/resize/close, spatial placement.
+   mermaid diagrams inside markdown, drag/resize/close, spatial placement.
 5. ✅ Question flow with answer evaluation + progress recording; gestures & pointing.
 6. ✅ Syllabus upload (PDF/text) + FTS retrieval; progress tracking; revision prompts.
-7. Settings UI (basic present); polish (interruption done, lip-sync done, idle variants).
+7. ✅ Settings UI (persona, pedagogy, voice, quality); interruption; lip-sync;
+   idle/talking micro-gestures; mock-mode notice; production static serving.
 
 ## Graph windows
 

@@ -437,6 +437,12 @@ body {
 
 #error-banner.hidden { display: none; }
 
+#error-banner.info {
+  background: rgba(30, 58, 100, 0.9);
+  border-color: rgba(122, 162, 255, 0.5);
+  color: #d4e2ff;
+}
+
 /* ------------------------------------------------------------------ */
 /* Settings panel                                                      */
 /* ------------------------------------------------------------------ */

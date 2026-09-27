@@ -27,20 +27,43 @@ which the app interprets and executes safely. See `docs/architecture.md`.
 # 1. Model asset (once)
 scripts/fetch-assets.sh
 
-# 2. Server
-cd server
-uv sync                # or: uv venv && uv pip install -e .
-cp ../.env.example ../.env   # then add LLM_API_KEY
-uv run uvicorn app.main:app --port 8000
+# 2. Configure
+cp .env.example .env          # add LLM_API_KEY (DeepSeek or any OpenAI-compatible API)
 
-# 3. Client
-cd client
-npm install
-npm run dev            # http://localhost:5173
+# 3. Run (production: builds client, serves everything on :8000)
+scripts/run.sh
+
+# ...or develop with hot reload (client :5173, server :8000)
+scripts/dev.sh
 ```
 
-Without an API key the server runs in `mock` mode so the full experience can be
-tested offline.
+Without an API key the server runs in `mock` mode (a canned lesson) so the
+full experience can be tested offline — the app shows a notice when this
+happens.
+
+### Manual setup
+
+```bash
+cd server && uv sync && uv run uvicorn app.main:app --port 8000   # server
+cd client && npm install && npm run dev                            # client (dev)
+```
+
+## Features
+
+- 3D anime tutor (VRM 1.0) with procedural idle life: blinking, breathing,
+  spring-bone hair, gaze tracking (me / windows / random), saccades, nods,
+  pointing, hand gestures, and phoneme-timed lip sync from local TTS.
+- Teaching brain (DeepSeek or any OpenAI-compatible API) that explains,
+  derives, gives examples, checks understanding, evaluates answers, and
+  adapts using a per-concept mastery store.
+- Spatial floating windows: markdown (with mermaid diagrams), equations
+  (KaTeX), graphs (Plotly, safe math parser), questions, tables, code,
+  images, and a drawable whiteboard. Draggable, resizable, closable.
+- Local expressive TTS (Kokoro, CPU) with streaming playback and interrupt.
+- Syllabus upload (PDF/text) with FTS retrieval injected into each lesson.
+- Settings: name, personality, teaching style, depth, difficulty, question
+  frequency, response length, custom instructions, voice, speech speed,
+  graphics quality.
 
 ## Docs
 

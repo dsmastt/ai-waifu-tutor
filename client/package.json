@@ -13,6 +13,7 @@
     "dompurify": "^3.4.16",
     "katex": "^0.16.22",
     "marked": "^16.4.1",
+    "mermaid": "^12.0.0",
     "plotly.js-dist-min": "^4.1.1",
     "three": "^0.151.3"
   },

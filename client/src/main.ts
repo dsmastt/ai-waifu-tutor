@@ -133,6 +133,14 @@ let dropAudio = false;
 
 client.on((event) => {
   switch (event.t) {
+    case 'hello':
+      if (event.provider === 'mock') {
+        hud.showNotice(
+          'Running in mock mode (no LLM API key). Add LLM_API_KEY to .env and restart the server for a real tutor.',
+          14000,
+        );
+      }
+      break;
     case 'status':
       turnActive = true;
       dropAudio = false;

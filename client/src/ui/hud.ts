@@ -228,8 +228,16 @@ export class HUD {
 
   showError(message: string): void {
     this.errorBanner.textContent = message;
+    this.errorBanner.classList.remove('info');
     this.errorBanner.classList.remove('hidden');
     window.setTimeout(() => this.errorBanner.classList.add('hidden'), 8000);
+  }
+
+  showNotice(message: string, durationMs = 12000): void {
+    this.errorBanner.textContent = message;
+    this.errorBanner.classList.add('info');
+    this.errorBanner.classList.remove('hidden');
+    window.setTimeout(() => this.errorBanner.classList.add('hidden'), durationMs);
   }
 
   setSpeaking(speaking: boolean): void {
