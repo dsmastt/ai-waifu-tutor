@@ -419,6 +419,12 @@ export class WindowManager {
     win.onAnswer = (qid, text) => this.onAnswer?.(qid, text);
     requestAnimationFrame(() => win.element.classList.add('visible'));
     this.focus(win.id);
+
+    // keep the room readable: retire the oldest non-question window past 7
+    const closable = [...this.windows.values()].filter((w) => w.kind !== 'question');
+    if (closable.length > 7) {
+      this.close(closable[0].id);
+    }
     return win;
   }
 

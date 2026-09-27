@@ -28,7 +28,6 @@ log = logging.getLogger(__name__)
 _SENTENCE_END = re.compile(r"[.!?…]+(\s|$)")
 _MAX_SENTENCE = 240
 
-
 class TutorBrain:
     def __init__(
         self,
@@ -72,7 +71,9 @@ class TutorBrain:
         """Handle a plain user message."""
         self._memory.append_message("user", user_text)
         async for event in self._stream_turn(
-            yield_speech=True, extra_system=None
+            yield_speech=True,
+            extra_system=None,
+            user_label=user_text,
         ):
             yield event
 
@@ -167,7 +168,6 @@ class TutorBrain:
         yield {"t": "status", "state": "thinking"}
 
         buffer = ""
-        spoken_parts: list[str] = []
         spoken_full = ""
         action_log: list[str] = []
         try:
@@ -185,7 +185,7 @@ class TutorBrain:
                     if yield_speech:
                         yield {"t": "speech_delta", "text": item.text}
                     buffer += item.text
-                    spoken_parts.append(item.text)
+
                     while True:
                         m = _SENTENCE_END.search(buffer)
                         cut = None
@@ -295,17 +295,14 @@ class TutorBrain:
             yield {"t": "visemes", "events": visemes}
         yield {"t": "utterance_end"}
 
-
 def _hard_cut(text: str) -> int:
     for i in range(len(text) - 1, 0, -1):
         if text[i] in " ,;:—-":
             return i + 1
     return len(text)
 
-
 def _normalize_answer(text: str) -> str:
     return " ".join(text.strip().lower().split())
-
 
 def _answer_matches(answer: str, correct: str, answer_type: str) -> bool:
     a = _normalize_answer(answer)
