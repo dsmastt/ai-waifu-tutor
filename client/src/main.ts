@@ -140,6 +140,7 @@ client.on((event) => {
           14000,
         );
       }
+      greetOnce();
       break;
     case 'status':
       turnActive = true;
@@ -188,6 +189,20 @@ client.on((event) => {
 });
 
 // ------------------------------------------------------------------ input
+
+function greetOnce(): void {
+  try {
+    if (localStorage.getItem('wt.greeted')) return;
+    localStorage.setItem('wt.greeted', '1');
+  } catch {
+    return;
+  }
+  window.setTimeout(() => {
+    turnActive = false;
+    dropAudio = false;
+    client.sendUserMessage('Hello!');
+  }, 600);
+}
 
 hud.onSend = (text) => {
   turnActive = false;

@@ -33,6 +33,12 @@ class MockProvider(TutorProvider):
                 user_text = m.get("content", "")
                 break
 
+        lowered = user_text.lower().strip()
+        if lowered in ("hello!", "hello", "hi!", "hi", "hey", "hey!"):
+            async for event in self._greeting():
+                yield event
+            return
+
         topic = user_text.strip()[:80] or "your question"
         script: list[LLMEvent] = [
             SpeechEvent(
@@ -140,6 +146,37 @@ class MockProvider(TutorProvider):
             ActionEvent(
                 t="action",
                 a={"type": "expression", "name": "thinking", "intensity": 0.8},
+            ),
+        ]
+        for event in script:
+            yield event
+            await asyncio.sleep(0.05)
+
+    async def _greeting(self) -> AsyncIterator[LLMEvent]:
+        script: list[LLMEvent] = [
+            SpeechEvent(
+                t="speech",
+                text=(
+                    "Hi! I'm your tutor. I'm running in mock mode right now, "
+                    "so my lessons are canned — add an LLM API key to the .env "
+                    "file to give me a real brain."
+                ),
+            ),
+            ActionEvent(
+                t="action",
+                a={"type": "expression", "name": "happy", "intensity": 1.0},
+            ),
+            ActionEvent(t="action", a={"type": "look_at", "target": "me"}),
+            SpeechEvent(
+                t="speech",
+                text=(
+                    "I can explain with floating windows, graphs, and "
+                    "questions. Ask me anything you'd like to learn!"
+                ),
+            ),
+            ActionEvent(
+                t="action",
+                a={"type": "gesture", "name": "wave"},
             ),
         ]
         for event in script:
