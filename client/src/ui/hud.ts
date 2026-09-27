@@ -52,6 +52,14 @@ export class HUD {
           <select id="st-voice">${VOICES.map((v) => `<option>${v}</option>`).join('')}</select></div>
         <div class="st-field"><label>Speech speed</label>
           <div class="st-range-row"><input type="range" id="st-speed" min="0.6" max="1.6" step="0.05"><output id="st-speed-out">1.0</output></div></div>
+        <div class="st-field"><label>Learning material (PDF / text)</label>
+          <input type="file" id="st-file" accept=".pdf,.txt,.md,.markdown,.csv,.json">
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <button id="st-upload" class="wt-submit">Upload</button>
+            <button id="st-clear-materials" class="wt-option" style="flex:1">Clear material</button>
+          </div>
+          <div id="st-materials-status" style="font-size:12px;color:var(--text-dim);margin-top:6px"></div>
+        </div>
         <button id="settings-save">Save & apply</button>
       </div>
       <div id="loading-screen"><div><div class="spinner"></div><div id="loading-label">Loading…</div></div></div>
@@ -113,6 +121,38 @@ export class HUD {
       };
       this.onSettings?.(settings);
       this.settingsPanel.classList.add('hidden');
+    });
+
+    const fileInput = this.root.querySelector<HTMLInputElement>('#st-file')!;
+    const materialsStatus = this.root.querySelector('#st-materials-status')!;
+    this.root.querySelector('#st-upload')!.addEventListener('click', async () => {
+      const file = fileInput.files?.[0];
+      if (!file) {
+        materialsStatus.textContent = 'Pick a file first.';
+        return;
+      }
+      materialsStatus.textContent = 'Uploading…';
+      const form = new FormData();
+      form.append('file', file);
+      try {
+        const res = await fetch('/api/syllabus', { method: 'POST', body: form });
+        const data = await res.json();
+        materialsStatus.textContent = data.ok
+          ? `Added “${file.name}” (${data.chunks} chunks, ${data.documents} docs total).`
+          : `Upload failed: ${data.error ?? 'unknown error'}`;
+        fileInput.value = '';
+      } catch {
+        materialsStatus.textContent = 'Upload failed (server unreachable?).';
+      }
+    });
+    this.root.querySelector('#st-clear-materials')!.addEventListener('click', async () => {
+      try {
+        const res = await fetch('/api/syllabus', { method: 'DELETE' });
+        const data = await res.json();
+        materialsStatus.textContent = data.ok ? 'Material cleared.' : 'Failed to clear.';
+      } catch {
+        materialsStatus.textContent = 'Server unreachable.';
+      }
     });
   }
 

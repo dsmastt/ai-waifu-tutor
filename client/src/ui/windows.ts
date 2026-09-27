@@ -83,7 +83,8 @@ export class TutorWindow {
     this.renderContent(spec);
 
     // size hints per kind
-    if (spec.kind === 'table' || spec.kind === 'graph') this.size = { w: 1.3, h: 0.95 };
+    if (spec.kind === 'table') this.size = { w: 1.3, h: 0.95 };
+    if (spec.kind === 'graph') this.size = { w: 1.55, h: 1.15 };
     if (spec.kind === 'question') this.size = { w: 0.95, h: 0.8 };
     if (spec.kind === 'whiteboard') this.size = { w: 1.25, h: 1.0 };
     if (spec.kind === 'equation') this.size = { w: 0.8, h: 0.5 };
@@ -159,13 +160,16 @@ export class TutorWindow {
       }
       case 'graph': {
         const div = document.createElement('div');
-        div.className = 'wt-graph-placeholder';
-        div.textContent = spec.title ?? 'Graph';
-        const note = document.createElement('p');
-        note.style.fontSize = '12px';
-        note.style.color = 'var(--text-dim)';
-        note.textContent = 'Interactive charts arrive in the next milestone.';
-        this.body.append(div, note);
+        div.style.width = '100%';
+        div.style.height = '100%';
+        this.body.appendChild(div);
+        this.body.style.padding = '6px';
+        void import('./graph').then(({ renderGraph }) =>
+          renderGraph(div, (spec.graph ?? {}) as Record<string, unknown> as Parameters<typeof renderGraph>[1]).catch((err) => {
+            console.warn('graph render failed', err);
+            div.textContent = 'Graph failed to render';
+          }),
+        );
         break;
       }
       case 'question': {

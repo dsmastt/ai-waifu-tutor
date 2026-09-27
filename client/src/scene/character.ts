@@ -32,8 +32,10 @@ interface ActiveGesture {
 }
 
 const _q = new THREE.Quaternion();
+const _qX = new THREE.Quaternion();
+const _qY = new THREE.Quaternion();
+const _qZ = new THREE.Quaternion();
 const _v = new THREE.Vector3();
-const _m = new THREE.Matrix4();
 
 export class TutorCharacter {
   vrm: VRM | null = null;
@@ -357,14 +359,14 @@ export class TutorCharacter {
     switch (g.name) {
       case 'point': {
         const az = this.targetAzimuth(g.target);
-        this.armPose('rightUpperArm', new THREE.Euler(az, -1.35, 0.1), e);
-        this.armPose('rightLowerArm', new THREE.Euler(0.05, -1.15, 0), e);
+        this.armPose('rightUpperArm', az, -1.35, 0.1, e);
+        this.armPose('rightLowerArm', 0.05, -1.15, 0, e);
         break;
       }
       case 'wave': {
         const wob = Math.sin(t * 11) * 0.45 * e;
-        this.armPose('rightUpperArm', new THREE.Euler(0, -1.25, -0.15), e);
-        this.armPose('rightLowerArm', new THREE.Euler(wob, -0.5, 0), e);
+        this.armPose('rightUpperArm', 0, -1.25, -0.15, e);
+        this.armPose('rightLowerArm', wob, -0.5, 0, e);
         break;
       }
       case 'nod':
@@ -376,24 +378,24 @@ export class TutorCharacter {
       case 'think': {
         this.headOffset.roll = 0.14 * e;
         this.headOffset.pitch = 0.12 * e;
-        this.armPose('rightUpperArm', new THREE.Euler(0.35, -0.85, 0.15), e);
-        this.armPose('rightLowerArm', new THREE.Euler(0.25, -1.55, 0.1), e);
+        this.armPose('rightUpperArm', 0.35, -0.85, 0.15, e);
+        this.armPose('rightLowerArm', 0.25, -1.55, 0.1, e);
         break;
       }
       case 'shrug': {
         this.headOffset.roll = 0.1 * e;
-        this.armPose('leftUpperArm', new THREE.Euler(0, -0.3, 0.45), e);
-        this.armPose('rightUpperArm', new THREE.Euler(0, -0.3, -0.45), e);
-        this.armPose('leftLowerArm', new THREE.Euler(0, -0.5, 0.2), e);
-        this.armPose('rightLowerArm', new THREE.Euler(0, -0.5, -0.2), e);
+        this.armPose('leftUpperArm', 0, -0.3, 0.45, e);
+        this.armPose('rightUpperArm', 0, -0.3, -0.45, e);
+        this.armPose('leftLowerArm', 0, -0.5, 0.2, e);
+        this.armPose('rightLowerArm', 0, -0.5, -0.2, e);
         break;
       }
       case 'clap': {
         const cl = Math.sin(t * 16) * 0.06 * e;
-        this.armPose('leftUpperArm', new THREE.Euler(0.5, -1.2, 0.25), e);
-        this.armPose('rightUpperArm', new THREE.Euler(0.5, -1.2, -0.25), e);
-        this.armPose('leftLowerArm', new THREE.Euler(0.2, -0.35 + cl, 0.1), e);
-        this.armPose('rightLowerArm', new THREE.Euler(0.2, -0.35 - cl, -0.1), e);
+        this.armPose('leftUpperArm', 0.5, -1.2, 0.25, e);
+        this.armPose('rightUpperArm', 0.5, -1.2, -0.25, e);
+        this.armPose('leftLowerArm', 0.2, -0.35 + cl, 0.1, e);
+        this.armPose('rightLowerArm', 0.2, -0.35 - cl, -0.1, e);
         break;
       }
       default:
@@ -411,12 +413,15 @@ export class TutorCharacter {
     return Math.atan2(dir.x, dir.z) - Math.atan2(this.forward.x, this.forward.z);
   }
 
-  private armPose(boneName: string, euler: THREE.Euler, weight: number): void {
+  private armPose(boneName: string, yaw: number, pitch: number, roll: number, weight: number): void {
     const bone = this.bone(boneName);
     const rest = bone && this.restWorld.get(bone);
     if (!bone || !rest) return;
     if (weight < 0.01) return;
-    const offset = _q.setFromEuler(euler);
+    // world-space offsets applied in raise->aim->tilt order
+    const offset = _qY.setFromEuler(new THREE.Euler(0, yaw, 0))
+      .multiply(_qX.setFromEuler(new THREE.Euler(pitch, 0, 0)))
+      .multiply(_qZ.setFromEuler(new THREE.Euler(0, 0, roll)));
     const desired = rest.clone().multiply(offset);
     // blend toward rest when weight < 1
     if (weight < 1) {
@@ -429,8 +434,8 @@ export class TutorCharacter {
     const t = performance.now() / 1000;
     const swayL = Math.sin(t * 0.9) * 0.03;
     const swayR = Math.sin(t * 0.9 + Math.PI) * 0.03;
-    this.armPose('leftLowerArm', new THREE.Euler(0, 0.06, swayL), 0.6);
-    this.armPose('rightLowerArm', new THREE.Euler(0, -0.06, swayR), 0.6);
+    this.armPose('leftLowerArm', 0, 0.06, swayL, 0.6);
+    this.armPose('rightLowerArm', 0, -0.06, swayR, 0.6);
   }
 
   private updateExpressions(dt: number): void {

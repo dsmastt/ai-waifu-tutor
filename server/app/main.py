@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
 from .llm import get_provider
-from .memory import MemoryStore, get_syllabus_store
+from .memory import MemoryStore, SQLiteSyllabusStore, get_syllabus_store
 from .protocol import ClientMessageAdapter
 from .tts import TTSEngine
 from .tutor import TutorBrain
@@ -31,7 +32,7 @@ app.add_middleware(
 memory = MemoryStore(settings.data_dir / "tutor.db")
 provider = get_provider(settings)
 tts = TTSEngine(settings)
-syllabus = get_syllabus_store()
+syllabus = get_syllabus_store(settings.data_dir / "syllabus.db")
 brain = TutorBrain(settings, provider, tts, memory, syllabus)
 
 
@@ -44,6 +45,62 @@ async def health() -> dict:
         "tts": tts.available,
         "voice": tts.voice,
     }
+
+
+def _extract_text(filename: str, data: bytes) -> str:
+    name = filename.lower()
+    if name.endswith(".pdf"):
+        from pypdf import PdfReader
+
+        reader = PdfReader(io.BytesIO(data))
+        return "\n".join(
+            page.extract_text() or "" for page in reader.pages
+        )
+    if name.endswith((".txt", ".md", ".markdown", ".rst", ".csv", ".json")):
+        try:
+            return data.decode("utf-8")
+        except UnicodeDecodeError:
+            return data.decode("latin-1", errors="replace")
+    raise ValueError("unsupported file type (use PDF or text files)")
+
+
+@app.post("/api/syllabus")
+async def upload_syllabus(file: UploadFile) -> dict:
+    data = await file.read()
+    if len(data) > 50 * 1024 * 1024:
+        return {"ok": False, "error": "file too large (50 MB max)"}
+    try:
+        text = _extract_text(file.filename or "upload", data)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    except Exception:
+        log.exception("document extraction failed")
+        return {"ok": False, "error": "could not read document"}
+
+    store = syllabus
+    if not isinstance(store, SQLiteSyllabusStore):
+        return {"ok": False, "error": "syllabus store not configured"}
+    chunks = await asyncio.to_thread(
+        store.add_document, file.filename or "upload", text
+    )
+    return {"ok": True, "chunks": chunks, **store.stats()}
+
+
+@app.get("/api/syllabus")
+async def syllabus_stats() -> dict:
+    store = syllabus
+    if not isinstance(store, SQLiteSyllabusStore):
+        return {"documents": 0, "chunks": 0, "files": []}
+    return store.stats()
+
+
+@app.delete("/api/syllabus")
+async def syllabus_clear() -> dict:
+    store = syllabus
+    if not isinstance(store, SQLiteSyllabusStore):
+        return {"ok": False}
+    await asyncio.to_thread(store.clear)
+    return {"ok": True}
 
 
 @app.websocket("/ws")

@@ -46,6 +46,7 @@ class TutorBrain:
         self._tutor_settings = default_tutor_settings()
         self._interrupt = asyncio.Event()
         self._active: asyncio.Task | None = None
+        self._pending_question: dict | None = None
 
     # -- public API ---------------------------------------------------------
 
@@ -77,10 +78,17 @@ class TutorBrain:
     async def run_answer_turn(
         self, question_id: str, answer_text: str
     ) -> AsyncIterator[dict]:
-        """Handle a student answer: frame it for evaluation."""
+        """Handle a student answer: evaluate it, then continue the lesson."""
+        verdict = self._evaluate_answer(question_id, answer_text)
+        verdict_note = ""
+        if verdict is True:
+            verdict_note = "The submitted answer is CORRECT."
+        elif verdict is False:
+            verdict_note = "The submitted answer is INCORRECT."
         context = (
             f"The student submitted this answer to question id '{question_id}': "
             f'"{answer_text}".\n'
+            f"{verdict_note}\n"
             "Evaluate it: acknowledge what is right, correct what is wrong, "
             "explain briefly, then continue the lesson. If they were right, "
             "praise them genuinely and move to the next idea."
@@ -91,6 +99,28 @@ class TutorBrain:
             user_label=f"My answer to your question: {answer_text}",
         ):
             yield event
+
+    def _evaluate_answer(self, question_id: str, answer: str) -> bool | None:
+        """Deterministic check when the question carried a correct answer."""
+        q = self._pending_question
+        if not q:
+            log.warning("no pending question for answer %r", answer)
+            return None
+        qid = q.get("id")
+        if qid and qid != question_id:
+            log.warning(
+                "answer question_id %r != pending %r", question_id, qid
+            )
+            return None
+        self._pending_question = None
+        correct = q.get("correct")
+        concept = q.get("concept") or "general"
+        if correct is None:
+            return None
+        ok = _answer_matches(answer, correct, q.get("answer_type"))
+        log.info("answer %r vs %r -> %s", answer, correct, ok)
+        self._memory.record_progress(concept, ok)
+        return ok
 
     # -- internals ----------------------------------------------------------
 
@@ -172,6 +202,7 @@ class TutorBrain:
                             break
 
                 elif isinstance(item, ActionEvent):
+                    self._register_question(item.a)
                     yield {"t": "action", "a": item.a.model_dump()}
 
             # flush remainder
@@ -191,6 +222,28 @@ class TutorBrain:
             producer.cancel()
             await asyncio.gather(producer, return_exceptions=True)
             self._active = None
+
+    def _register_question(self, action) -> None:
+        """Track the latest question the tutor asked, for answer evaluation."""
+        from ..protocol import AskQuestionAction, CreateWindowAction
+
+        if isinstance(action, AskQuestionAction):
+            self._pending_question = {
+                "id": action.id,
+                "prompt": action.prompt,
+                "answer_type": action.answer_type,
+                "correct": action.correct,
+                "concept": action.concept,
+            }
+        elif isinstance(action, CreateWindowAction) and action.win.kind == "question":
+            q = action.win.question or {}
+            self._pending_question = {
+                "id": action.id,
+                "prompt": q.get("prompt"),
+                "answer_type": q.get("answer_type", "text"),
+                "correct": q.get("correct"),
+                "concept": q.get("concept"),
+            }
 
     async def _speak(self, sentence: str) -> AsyncIterator[dict]:
         if not self._tts.available:
@@ -216,3 +269,22 @@ def _hard_cut(text: str) -> int:
         if text[i] in " ,;:—-":
             return i + 1
     return len(text)
+
+
+def _normalize_answer(text: str) -> str:
+    return " ".join(text.strip().lower().split())
+
+
+def _answer_matches(answer: str, correct: str, answer_type: str) -> bool:
+    a = _normalize_answer(answer)
+    c = _normalize_answer(correct)
+    if not a or not c:
+        return False
+    if a == c:
+        return True
+    if answer_type == "numeric":
+        try:
+            return abs(float(a) - float(c)) < 1e-6 * max(1.0, abs(float(c)))
+        except ValueError:
+            return False
+    return a in c or c in a

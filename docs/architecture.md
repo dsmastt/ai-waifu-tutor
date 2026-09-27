@@ -80,9 +80,24 @@ Server → client: `hello`, `status`, `error`, plus the above. Client → server
 ## Roadmap (vertical slices)
 
 1. ✅ Scaffold + protocol + server skeleton.
-2. 3D room + VRM character with idle life (blink, breathe, look-at, spring bones).
-3. End-to-end: message → LLM (mock/deepseek) → TTS + speech + text window.
-4. Window system: all kinds, drag/resize/close, spatial placement.
-5. Question flow with answer evaluation; gestures & pointing.
-6. Syllabus upload + retrieval; progress tracking; revision prompts.
-7. Settings UI; polish (interruption, lip-sync, idle variants).
+2. ✅ 3D room + VRM character with idle life (blink, breathe, look-at, spring bones).
+3. ✅ End-to-end: message → LLM (mock/deepseek) → TTS + speech + text window.
+4. ✅ Window system: markdown/equation/graph/question/image/table/code/whiteboard,
+   drag/resize/close, spatial placement.
+5. ✅ Question flow with answer evaluation + progress recording; gestures & pointing.
+6. ✅ Syllabus upload (PDF/text) + FTS retrieval; progress tracking; revision prompts.
+7. Settings UI (basic present); polish (interruption done, lip-sync done, idle variants).
+
+## Graph windows
+
+Graph specs are plain JSON data: `{functions: ["x^2", "sin(x)"], x_range, labels,
+annotations}` or `{x, y, style}`. Function strings are compiled by a whitelist
+recursive-descent parser (`client/src/ui/mathexpr.ts`) — **never eval'd**.
+Rendered with Plotly (lazy-loaded code-split chunk).
+
+## Syllabus pipeline
+
+Upload (PDF via pypdf / text) → paragraph chunking (1k chars, 120 overlap) →
+SQLite FTS5 index → top-k retrieval per turn, injected into the system prompt
+as "SYLLABUS" context. Semantic embeddings can replace the retriever later
+behind the same `SyllabusStore` interface.

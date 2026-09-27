@@ -28,6 +28,31 @@ class OpenAICompatProvider(TutorProvider):
         self._model = settings.llm_model
         self._lock = asyncio.Lock()
 
+    def _parse_line_robust(self, line: str):
+        """Parse one model line: strict NDJSON first, then JSON extraction,
+        then a prose fallback (treated as plain speech)."""
+        line = line.strip()
+        if not line:
+            return None
+        event = self._parse_line(line)
+        if event is not None:
+            return event
+
+        # strip markdown fences
+        if line.startswith("```"):
+            line = line.strip("`")
+        start = line.find("{")
+        end = line.rfind("}")
+        if start >= 0 and end > start:
+            event = self._parse_line(line[start : end + 1])
+            if event is not None:
+                return event
+
+        # prose fallback: model ignored the protocol; speak the text verbatim
+        from ..protocol import SpeechEvent
+
+        return SpeechEvent(t="speech", text=line)
+
     async def stream_turn(
         self, messages: list[dict], temperature: float
     ) -> AsyncIterator[LLMEvent]:
@@ -52,10 +77,10 @@ class OpenAICompatProvider(TutorProvider):
                 buffer += delta.content
                 while "\n" in buffer:
                     line, buffer = buffer.split("\n", 1)
-                    event = self._parse_line(line)
+                    event = self._parse_line_robust(line)
                     if event is not None:
                         yield event
             # flush any trailing partial line (usually whitespace only)
-            event = self._parse_line(buffer)
+            event = self._parse_line_robust(buffer)
             if event is not None:
                 yield event

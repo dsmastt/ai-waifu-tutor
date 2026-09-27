@@ -11,6 +11,8 @@ dependencies = [
     "python-dotenv>=1.0",
     "numpy>=1.26",
     "kokoro-onnx>=0.4.4",
+    "pypdf>=4.0",
+    "python-multipart>=0.0.32",
 ]
 
 [tool.uv]

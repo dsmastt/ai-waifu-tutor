@@ -100,16 +100,41 @@ class MockProvider(TutorProvider):
             ),
             SpeechEvent(
                 t="speech",
+                text="I can also plot functions for you, like this parabola!",
+            ),
+            ActionEvent(
+                t="action",
+                a={
+                    "type": "create_window",
+                    "win": WindowSpec(
+                        kind="graph",
+                        title="A parabola",
+                        graph={
+                            "functions": ["x^2", "2x"],
+                            "x_range": [-3, 3],
+                            "labels": {"x": "x", "y": "y", "title": "y = x² and its derivative"},
+                            "annotations": [
+                                {"x": 1, "y": 1, "text": "tangent slope = 2"}
+                            ],
+                        },
+                        position="left",
+                    ),
+                },
+            ),
+            SpeechEvent(
+                t="speech",
                 text="Now, a quick check of understanding!",
             ),
             ActionEvent(
                 t="action",
                 a={
                     "type": "ask_question",
+                    "id": "q1",
                     "prompt": "What is the derivative of x squared?",
                     "answer_type": "choice",
                     "options": ["2x", "x", "2x^2"],
                     "correct": "2x",
+                    "concept": "derivatives of polynomials",
                 },
             ),
             ActionEvent(

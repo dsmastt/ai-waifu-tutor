@@ -80,10 +80,12 @@ class FocusWindowAction(BaseModel):
 
 class AskQuestionAction(BaseModel):
     type: Literal["ask_question"]
+    id: str | None = Field(default=None, max_length=64)
     prompt: str = Field(max_length=2_000)
     answer_type: Literal["text", "choice", "numeric"] = "text"
     options: list[str] | None = Field(default=None, max_length=8)
     correct: str | None = Field(default=None, max_length=500)
+    concept: str | None = Field(default=None, max_length=120)
 
 
 Action = Annotated[

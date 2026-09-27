@@ -89,19 +89,20 @@ class MemoryStore:
         concept = concept.strip()[:120]
         if not concept:
             return
+        is_correct = bool(correct)
         with self._lock:
             row = self._conn.execute(
                 "SELECT mastery, exposures, correct, wrong FROM progress WHERE concept = ?",
                 (concept,),
             ).fetchone()
             if row is None:
-                mastery, exposures, correct, wrong = 0.0, 0, 0, 0
+                mastery, exposures, n_correct, n_wrong = 0.0, 0, 0, 0
             else:
-                mastery, exposures, correct, wrong = row
+                mastery, exposures, n_correct, n_wrong = row
             exposures += 1
-            correct += 1 if correct else 0
-            wrong += 0 if correct else 1
-            delta = weight if correct else -weight * 1.5
+            n_correct += 1 if is_correct else 0
+            n_wrong += 0 if is_correct else 1
+            delta = weight if is_correct else -weight * 1.5
             mastery = max(0.0, min(1.0, mastery + delta))
             self._conn.execute(
                 "INSERT INTO progress (concept, mastery, exposures, correct, wrong, last_seen) "
@@ -109,7 +110,7 @@ class MemoryStore:
                 "ON CONFLICT(concept) DO UPDATE SET mastery=excluded.mastery, "
                 "exposures=excluded.exposures, correct=excluded.correct, "
                 "wrong=excluded.wrong, last_seen=excluded.last_seen",
-                (concept, mastery, exposures, correct, wrong, time.time()),
+                (concept, mastery, exposures, n_correct, n_wrong, time.time()),
             )
             self._conn.commit()
 
