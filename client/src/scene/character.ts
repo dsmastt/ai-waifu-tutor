@@ -37,6 +37,7 @@ const _qParent = new THREE.Quaternion();
 const _tmpQuatSmooth = new THREE.Quaternion();
 const _qFromTo = new THREE.Quaternion();
 const _qTwist = new THREE.Quaternion();
+const _qLayered = new THREE.Quaternion();
 const _deltaDir = new THREE.Vector3();
 const _deltaDir2 = new THREE.Vector3();
 const _v = new THREE.Vector3();
@@ -326,6 +327,8 @@ export class TutorCharacter {
       this.updateBreathing(dt, time);
     } else {
       this.updateClipGestures(dt);
+      // layered life: breathing + arm sway composed on top of the clip pose
+      this.updateLayeredLife(dt, time);
     }
     // gestures always run: with clips, procedural arms are delta-based and
     // compose on top of the animated pose
@@ -354,6 +357,36 @@ export class TutorCharacter {
     this.vrm.update(dt);
   }
 
+  /**
+   * Procedural life composed ON TOP of an animated clip pose: breathing in
+   * the chest and a gentle arm sway, so even a rigid idle clip feels alive.
+   * Deltas are applied to the bones' current (animated) orientation.
+   */
+  private updateLayeredLife(dt: number, time: number): void {
+    this.breathePhase += dt;
+    const breath = Math.sin(this.breathePhase * 1.35) * 0.028;
+    const sway = Math.sin(time * 0.85) * 0.05;
+
+    const chest = this.bone('chest');
+    if (chest) {
+      chest.getWorldQuaternion(_q);
+      const desired = _q
+        .clone()
+        .multiply(_qLayered.setFromEuler(new THREE.Euler(0, 0, breath)));
+      this.smoothTo(chest, desired, dt, 7);
+    }
+    for (const side of ['left', 'right'] as const) {
+      const upper = this.bone(`${side}UpperArm`);
+      if (!upper) continue;
+      upper.getWorldQuaternion(_q);
+      const amp = (side === 'left' ? sway : -sway) * 0.7;
+      const desired = _q
+        .clone()
+        .multiply(_qLayered.setFromEuler(new THREE.Euler(amp, 0, breath * 0.4)));
+      this.smoothTo(upper, desired, dt, 7);
+    }
+  }
+
   private updateGroundBias(dt: number): void {
     const vrm = this.vrm;
     if (!vrm) return;
@@ -369,8 +402,8 @@ export class TutorCharacter {
     this.footSamples.push(localFoot);
     if (this.footSamples.length > 120) this.footSamples.shift();
     const lowest = Math.min(...this.footSamples);
-    const target = THREE.MathUtils.clamp(0.015 - lowest, -0.25, 0.25);
-    this.groundBias += (target - this.groundBias) * Math.min(1, dt * 2.5);
+    const target = THREE.MathUtils.clamp(0.008 - lowest, -0.25, 0.25);
+    this.groundBias += (target - this.groundBias) * Math.min(1, dt * 5);
   }
 
   private updateClipGestures(dt: number): void {
@@ -385,7 +418,7 @@ export class TutorCharacter {
     if (!this.speaking && !this.clips!.oneShotActive) {
       this.idleVariantTimer -= dt;
       if (this.idleVariantTimer <= 0) {
-        this.idleVariantTimer = 12 + Math.random() * 14;
+        this.idleVariantTimer = 8 + Math.random() * 10;
         const roll = Math.random();
         const alts = this.clips!.variantNames('idleAlt');
         if (roll < 0.12 && this.clips!.has('lookaway')) {
@@ -398,7 +431,7 @@ export class TutorCharacter {
             if (!this.speaking && !this.clips?.oneShotActive) {
               this.clips?.crossFade('base', 0.5);
             }
-          }, 6000 + Math.random() * 5000);
+          }, 8000 + Math.random() * 6000);
         }
       }
     }
@@ -804,9 +837,9 @@ export class TutorCharacter {
     this.smoothTo(lower, desiredLower, dt);
   }
 
-  private smoothTo(bone: THREE.Bone, desired: THREE.Quaternion, dt: number): void {
+  private smoothTo(bone: THREE.Bone, desired: THREE.Quaternion, dt: number, rate = 9): void {
     bone.getWorldQuaternion(_tmpQuatSmooth);
-    _tmpQuatSmooth.slerp(desired, Math.min(1, dt * 9));
+    _tmpQuatSmooth.slerp(desired, Math.min(1, dt * rate));
     this.setBoneWorldRotation(bone, _tmpQuatSmooth);
   }
 
