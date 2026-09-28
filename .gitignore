@@ -33,3 +33,6 @@ client/public/models/*.glb
 .idea/
 .vscode/
 *.swp
+
+# Mixamo animation files (user-downloaded; keep out of git)
+client/public/animations/*.fbx

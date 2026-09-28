@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 import unicodedata
 import wave
 
@@ -156,6 +157,11 @@ class TTSEngine:
     def _load(self) -> None:
         if self._kokoro is not None or self._failed is not None:
             return
+        # Kokoro runs on CPU on purpose (keeps VRAM free for rendering).
+        # Cap the inference thread pool so short synthesis bursts don't pin
+        # every core (lowers temperature spikes at a small latency cost).
+        threads = os.environ.get("TTS_THREADS", "4")
+        os.environ.setdefault("OMP_NUM_THREADS", threads)
         from kokoro_onnx import Kokoro  # heavy import, defer
 
         model = self._settings.kokoro_model_path

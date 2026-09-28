@@ -1,0 +1,20 @@
+{
+  "$comment": "Mixamo animation mapping. Download FBX files into client/public/animations/ and list them here. Files that don't exist are skipped (procedural fallback used). rootCorrection rotates the clip around Y if the character faces the wrong way.",
+  "base": { "file": "Breathing Idle.fbx", "rootCorrection": 0 },
+  "idleAlts": [
+    { "file": "Looking Around.fbx", "rootCorrection": 0 },
+    { "file": "Happy Idle.fbx", "rootCorrection": 0 }
+  ],
+  "clips": {
+    "talking": { "file": "Talking.fbx", "rootCorrection": 0 },
+    "thinking": { "file": "Thinking.fbx", "rootCorrection": 0 },
+    "wave": { "file": "Wave.fbx", "rootCorrection": 0 },
+    "nod": { "file": "Agreeing.fbx", "rootCorrection": 0 },
+    "shake": { "file": "Disagreeing.fbx", "rootCorrection": 0 },
+    "point": { "file": "Pointing.fbx", "rootCorrection": 0 },
+    "clap": { "file": "Clapping.fbx", "rootCorrection": 0 },
+    "shrug": { "file": "Shrug Shoulders.fbx", "rootCorrection": 0 },
+    "sad": { "file": "Sad Idle.fbx", "rootCorrection": 0 },
+    "cheer": { "file": "Cheering.fbx", "rootCorrection": 0 }
+  }
+}

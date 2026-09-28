@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { VRM, VRMLoaderPlugin, VRMUtils, VRMHumanBoneName } from '@pixiv/three-vrm';
+import { ClipLibrary } from './clips';
 
 const EXPRESSION_PRESETS = {
   happy: ['happy'],
@@ -35,6 +36,7 @@ const _q = new THREE.Quaternion();
 const _qParent = new THREE.Quaternion();
 const _tmpQuatSmooth = new THREE.Quaternion();
 const _qFromTo = new THREE.Quaternion();
+const _qTwist = new THREE.Quaternion();
 const _v = new THREE.Vector3();
 const _axis = new THREE.Vector3();
 const _tmpA = new THREE.Vector3();
@@ -97,6 +99,11 @@ export class TutorCharacter {
   private gesture: ActiveGesture | null = null;
   private headOffset = { yaw: 0, pitch: 0, roll: 0 };
 
+  // animation clips (Mixamo, optional)
+  clips: ClipLibrary | null = null;
+  private speaking = false;
+  private idleVariantTimer = 14;
+
   // idle life
   private idleGestureTimer = 8;
   private lookAroundTimer = 4;
@@ -109,10 +116,7 @@ export class TutorCharacter {
   async load(url: string): Promise<void> {
     const loader = new GLTFLoader();
     loader.crossOrigin = 'anonymous';
-    loader.register(
-      (parser) =>
-        new VRMLoaderPlugin(parser, { autoUpdateHumanBones: false }),
-    );
+    loader.register((parser) => new VRMLoaderPlugin(parser));
     const gltf = await loader.loadAsync(url);
     VRMUtils.removeUnnecessaryJoints(gltf.scene);
     const vrm = gltf.userData.vrm as VRM;
@@ -134,6 +138,15 @@ export class TutorCharacter {
     // disable the VRM's own look-at; we drive gaze procedurally
     (vrm as unknown as { lookAt: unknown }).lookAt = null;
 
+    // animation clips drive the NORMALIZED skeleton; three-vrm copies it to
+    // the raw skeleton every update (autoUpdateHumanBones defaults true).
+    // Rename the normalized nodes to VRM bone names so AnimationMixer can
+    // bind tracks (their shipped names are "Normalized_*").
+    for (const [name, b] of Object.entries(vrm.humanoid!.normalizedHumanBones)) {
+      if (b.node) b.node.name = name;
+    }
+    this.clips = new ClipLibrary(vrm.humanoid!.normalizedHumanBonesRoot!);
+
     this.captureBones();
     this.captureExpressions();
 
@@ -148,13 +161,14 @@ export class TutorCharacter {
 
   private captureBones(): void {
     const vrm = this.vrm!;
+    vrm.humanoid!.normalizedHumanBonesRoot!.updateMatrixWorld(true);
     const names = [
       'hips', 'spine', 'chest', 'neck', 'head',
       'leftUpperArm', 'leftLowerArm', 'leftHand',
       'rightUpperArm', 'rightLowerArm', 'rightHand',
     ] as const;
     for (const n of names) {
-      const node = vrm.humanoid!.getRawBoneNode(
+      const node = vrm.humanoid!.getNormalizedBoneNode(
         VRMHumanBoneName[
           n.charAt(0).toUpperCase() + n.slice(1) as keyof typeof VRMHumanBoneName
         ],
@@ -236,6 +250,16 @@ export class TutorCharacter {
   }
 
   playGesture(name: string, target?: THREE.Vector3 | null): void {
+    // Mixamo one-shot when available (pointing keeps its procedural aim
+    // because the clip can't target an arbitrary window)
+    const clipName: Record<string, string> = {
+      nod: 'nod', shake: 'shake', wave: 'wave', think: 'thinking',
+      shrug: 'shrug', clap: 'clap', cheer: 'cheer', sad: 'sad',
+    };
+    if (name !== 'point' && this.clips && this.clips.has(clipName[name])) {
+      this.clips.playOneShot(clipName[name]);
+      return;
+    }
     const durations: Record<string, number> = {
       point: 2.4, nod: 1.0, shake: 1.2, wave: 1.6,
       think: 2.8, shrug: 1.2, clap: 1.4, talk: 1.4, stretch: 2.4,
@@ -248,6 +272,28 @@ export class TutorCharacter {
     };
   }
 
+  /** Talking state: switch the ambient clip while she explains. */
+  setSpeaking(speaking: boolean): void {
+    this.speaking = speaking;
+    if (!this.clips) return;
+    if (speaking && this.clips.has('talking')) {
+      this.clips.crossFade('talking', 0.35);
+    } else if (!speaking && this.clips.has('base')) {
+      this.clips.crossFade('base', 0.35);
+    }
+  }
+
+  getNormalizedBones(): Map<string, THREE.Bone> {
+    const out = new Map<string, THREE.Bone>();
+    const humanoid = this.vrm?.humanoid;
+    if (!humanoid) return out;
+    for (const [name, bone] of Object.entries(humanoid.normalizedHumanBones)) {
+      const node = (bone as { node?: THREE.Bone }).node;
+      if (node) out.set(name, node);
+    }
+    return out;
+  }
+
   setViseme(v: string, weight: number): void {
     this.viseme = { v, weight: Math.max(0, Math.min(1, weight)) };
   }
@@ -256,11 +302,22 @@ export class TutorCharacter {
 
   update(dt: number, time: number, camera: THREE.Camera): void {
     if (!this.vrm) return;
+    const clipsActive =
+      !!this.clips && (this.clips.hasBase || this.clips.oneShotActive);
+
+    if (clipsActive) this.clips!.update(dt);
     this.updateGaze(dt, time, camera);
     this.updateIdleLife(dt);
     this.updateBlink(dt, time);
-    this.updateBreathing(dt, time);
-    this.updateGestures(dt, time);
+    const proceduralNeeded =
+      !clipsActive ||
+      (this.gesture !== null && ['point', 'talk', 'stretch'].includes(this.gesture.name));
+    if (proceduralNeeded) {
+      this.updateBreathing(dt, time);
+      this.updateGestures(dt, time);
+    } else {
+      this.updateClipGestures(dt);
+    }
     this.updateExpressions(dt);
     this.updatePose();
 
@@ -276,6 +333,30 @@ export class TutorCharacter {
     this.group.position.y = Math.sin(this.breathePhase * 1.1) * 0.006;
 
     this.vrm.update(dt);
+  }
+
+  private updateClipGestures(dt: number): void {
+    // breathing phase still drives the body bob
+    this.breathePhase += dt;
+    this.headOffset.yaw *= Math.max(0, 1 - dt * 6);
+    this.headOffset.pitch *= Math.max(0, 1 - dt * 6);
+    this.headOffset.roll *= Math.max(0, 1 - dt * 6);
+
+    // occasional ambient variation while idle
+    if (!this.speaking) {
+      this.idleVariantTimer -= dt;
+      if (this.idleVariantTimer <= 0) {
+        this.idleVariantTimer = 16 + Math.random() * 14;
+        const alts = this.clips!.names().filter((n) => n.startsWith('idleAlt'));
+        if (alts.length) {
+          const pick = alts[Math.floor(Math.random() * alts.length)];
+          this.clips!.crossFade(pick, 0.5);
+          window.setTimeout(() => {
+            if (!this.speaking) this.clips?.crossFade('base', 0.5);
+          }, 6000 + Math.random() * 4000);
+        }
+      }
+    }
   }
 
   setListening(active: boolean): void {
@@ -528,7 +609,7 @@ export class TutorCharacter {
             .normalize();
           const elbow = _tmpB.clone().addScaledVector(_dirUpper, upperLen);
           _dirLower.copy(chin).sub(elbow).normalize();
-          this.poseArm('right', _dirUpper, _dirLower, 0, e, dt);
+          this.poseArm('right', _dirUpper, _dirLower, 0, e, dt, 1.05);
         }
         break;
       }
@@ -622,6 +703,7 @@ export class TutorCharacter {
     bend: number,
     weight: number,
     dt: number,
+    lowerTwist = 0,
   ): void {
     const upperName = side + 'UpperArm';
     const lowerName = side + 'LowerArm';
@@ -651,6 +733,10 @@ export class TutorCharacter {
     const desiredLower = restLower
       .clone()
       .multiply(fromToQuat(restLowerDir, ldir, _qFromTo));
+    if (lowerTwist !== 0) {
+      // roll the forearm around its own axis to fix palm orientation
+      desiredLower.multiply(_qTwist.setFromAxisAngle(ldir, lowerTwist));
+    }
     if (weight < 1) desiredLower.slerp(restLower, 1 - weight);
 
     this.smoothTo(upper, desiredUpper, dt);

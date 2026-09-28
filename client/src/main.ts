@@ -2,12 +2,14 @@ import 'katex/dist/katex.min.css';
 import './styles.css';
 
 import * as THREE from 'three';
+import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { World } from './scene/world';
 import { TutorCharacter } from './scene/character';
 import { WindowManager } from './ui/windows';
 import { HUD } from './ui/hud';
 import { TutorClient } from './net/client';
 import { AudioManager } from './net/audio';
+import { retargetMixamoClip } from './scene/retarget';
 import { MODEL_PATH, loadSettings, saveSettings, type TutorSettings } from './config';
 import type { ServerEvent } from './net/types';
 
@@ -47,7 +49,10 @@ function applyQuality(quality: TutorSettings['quality']): void {
 }
 
 // debug handle (test harness + power users)
-(window as unknown as { __wt: unknown }).__wt = { world, character, windows, hud, client, audio };
+(window as unknown as { __wt: unknown }).__wt = {
+  world, character, windows, hud, client, audio,
+  THREE, retargetMixamoClip,
+};
 
 const tmpVec = new THREE.Vector3();
 
@@ -58,6 +63,7 @@ const tmpVec = new THREE.Vector3();
     hud.setLoading('Loading avatar…', false);
     await character.load(MODEL_PATH);
     hud.setLoading('Ready', true);
+    void loadAnimations();
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error('failed to load character', err);
@@ -66,6 +72,73 @@ const tmpVec = new THREE.Vector3();
   }
   client.connect();
 })();
+
+// ------------------------------------------------------------------ clips
+
+interface ManifestEntry {
+  file: string;
+  rootCorrection?: number;
+}
+
+interface AnimManifest {
+  base?: ManifestEntry;
+  idleAlts?: ManifestEntry[];
+  clips?: Record<string, ManifestEntry>;
+}
+
+async function loadAnimations(): Promise<void> {
+  if (!character.clips) return;
+  try {
+    const res = await fetch('/animations/manifest.json');
+    if (!res.ok) return;
+    const manifest = (await res.json()) as AnimManifest;
+    const fbx = new FBXLoader();
+    const bones = character.getNormalizedBones();
+
+    const loadOne = async (
+      name: string,
+      entry: ManifestEntry,
+      asBase: boolean,
+    ): Promise<boolean> => {
+      try {
+        const root = await fbx.loadAsync(`/animations/${entry.file}`);
+        const clip = root.animations[0];
+        if (!clip) return false;
+        const result = retargetMixamoClip(
+          root,
+          clip,
+          bones,
+          entry.rootCorrection ?? 0,
+        );
+        if (!result) {
+          console.warn(`[anim] no retargetable tracks in ${entry.file}`);
+          return false;
+        }
+        character.clips!.register(name, result.clip, asBase);
+        console.info(`[anim] loaded ${entry.file} (${result.mapped} tracks) as ${name}`);
+        return true;
+      } catch (err) {
+        console.warn(`[anim] missing or failed ${entry.file}:`, err);
+        return false;
+      }
+    };
+
+    let i = 0;
+    for (const alt of manifest.idleAlts ?? []) {
+      await loadOne(`idleAlt${i++}`, alt, false);
+    }
+    for (const [name, entry] of Object.entries(manifest.clips ?? {})) {
+      await loadOne(name, entry, false);
+    }
+    if (character.clips.hasBase) {
+      console.info(`[anim] ${character.clips.names().length} clips ready`);
+    } else {
+      console.info('[anim] no idle clip found; using procedural animation');
+    }
+  } catch (err) {
+    console.warn('[anim] manifest load failed', err);
+  }
+}
 
 // ------------------------------------------------------------------ actions
 
