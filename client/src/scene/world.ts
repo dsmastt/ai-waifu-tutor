@@ -1,26 +1,34 @@
 import * as THREE from 'three';
-import { CSS3DRenderer, CSS3DObject } from 'three/examples/jsm/renderers/CSS3DRenderer.js';
 
 export interface FrameInfo {
   dt: number;
   time: number;
 }
 
+export interface ScreenProjection {
+  x: number;
+  y: number;
+  depth: number;
+  visible: boolean;
+}
+
 /**
- * Owns the WebGL + CSS3D renderers, the shared camera, the environment, and
- * the render loop. The camera gently orbits around the tutor; the user can
- * drag to rotate and scroll to zoom.
+ * Owns the WebGL renderer, the shared camera, the environment, and the
+ * render loop. Floating windows are plain DOM elements positioned each
+ * frame by direct camera projection (see WindowManager).
  */
 export class World {
   readonly renderer: THREE.WebGLRenderer;
-  readonly cssRenderer: CSS3DRenderer;
   readonly scene = new THREE.Scene();
-  readonly cssScene = new THREE.Scene();
   readonly camera: THREE.PerspectiveCamera;
 
   private container: HTMLElement;
   private clock = new THREE.Clock();
   private callbacks: ((info: FrameInfo) => void)[] = [];
+
+  get viewport(): HTMLElement {
+    return this.container;
+  }
 
   private yaw = 0;
   private distance = 3.6;
@@ -42,11 +50,6 @@ export class World {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     container.appendChild(this.renderer.domElement);
-
-    this.cssRenderer = new CSS3DRenderer();
-    this.cssRenderer.setSize(container.clientWidth, container.clientHeight);
-    this.cssRenderer.domElement.classList.add('css3d-container');
-    container.appendChild(this.cssRenderer.domElement);
 
     this.camera = new THREE.PerspectiveCamera(
       44,
@@ -193,13 +196,28 @@ export class World {
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h);
-    this.cssRenderer.setSize(w, h);
   }
 
   /** World-units per CSS pixel at a given depth (for dragging / scaling windows). */
   worldPerPixel(distance: number): number {
     const h = this.container.clientHeight;
     return (2 * distance * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2))) / h;
+  }
+
+  /**
+   * Project a world position to screen space using the same camera math as
+   * the WebGL scene. Deterministic and testable.
+   */
+  project(worldPos: THREE.Vector3, out: ScreenProjection): ScreenProjection {
+    const v = _proj.copy(worldPos).project(this.camera);
+    const w = this.container.clientWidth;
+    const h = this.container.clientHeight;
+    out.x = ((v.x + 1) / 2) * w;
+    out.y = ((1 - v.y) / 2) * h;
+    out.depth = v.z;
+    // v.z is -1 (near) .. 1 (far); visible when in front of the camera
+    out.visible = v.z < 1 && v.z > -1;
+    return out;
   }
 
   onFrame(cb: (info: FrameInfo) => void): () => void {
@@ -219,7 +237,6 @@ export class World {
       this.updateCamera(time, dt);
       for (const cb of this.callbacks) cb({ dt, time });
       this.renderer.render(this.scene, this.camera);
-      this.cssRenderer.render(this.cssScene, this.camera);
     };
     loop();
   }
@@ -241,8 +258,6 @@ export class World {
   cameraWorldPosition(out: THREE.Vector3): THREE.Vector3 {
     return out.copy(this.camera.position);
   }
-
-  makeCSS3DObject(element: HTMLElement): CSS3DObject {
-    return new CSS3DObject(element);
-  }
 }
+
+const _proj = new THREE.Vector3();

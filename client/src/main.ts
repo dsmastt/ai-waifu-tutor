@@ -111,7 +111,7 @@ function handleAction(a: ServerEvent & { t: 'action' }): void {
         character.lookAt('me');
       } else if (action.target === 'board') {
         const last = windows.lastFocused;
-        character.lookAt('board', last ? last.object.position : null);
+        character.lookAt('board', last ? last.position : null);
       } else if (action.target.startsWith('window:')) {
         const id = action.target.slice('window:'.length);
         if (windows.getPosition(id, tmpVec)) character.lookAt('window', tmpVec);
@@ -299,7 +299,7 @@ let lastSmile = 0;
 
 world.onFrame(({ dt }) => {
   character.update(dt, performance.now() / 1000, world.camera);
-  windows.update(viewport.clientHeight);
+  windows.update();
 
   // audio -> status + lip sync
   const speaking = audio.speaking;

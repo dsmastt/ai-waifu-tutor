@@ -21,15 +21,16 @@ let windowCounter = 0;
 export class TutorWindow {
   readonly id: string;
   readonly kind: string;
-  readonly object: THREE.Object3D;
   readonly element: HTMLDivElement;
+  /** World-space anchor position (used for placement, drag, gaze). */
+  readonly position = new THREE.Vector3();
   question: QuestionSpec | null = null;
   answered = false;
 
   private body: HTMLElement;
   private titleEl: HTMLElement;
   private size = { w: 1.05, h: 0.85 };
-  private dragState: { px: number; py: number; pos: THREE.Vector3; right: THREE.Vector3; up: THREE.Vector3 } | null = null;
+  private dragState: { px: number; py: number; pos: THREE.Vector3 } | null = null;
   private resizing = false;
   onClose: ((win: TutorWindow) => void) | null = null;
   onAnswer: ((questionId: string, text: string) => void) | null = null;
@@ -89,7 +90,6 @@ export class TutorWindow {
     if (spec.kind === 'whiteboard') this.size = { w: 1.25, h: 1.0 };
     if (spec.kind === 'equation') this.size = { w: 0.8, h: 0.5 };
 
-    this.object = world.makeCSS3DObject(el);
     this.bindDrag(titlebar);
     this.bindResize(resize);
   }
@@ -322,9 +322,7 @@ export class TutorWindow {
       this.dragState = {
         px: e.clientX,
         py: e.clientY,
-        pos: this.object.position.clone(),
-        right: new THREE.Vector3(),
-        up: new THREE.Vector3(),
+        pos: this.position.clone(),
       };
       titlebar.setPointerCapture(e.pointerId);
     });
@@ -349,7 +347,7 @@ export class TutorWindow {
         p.z *= clamped / len;
       }
       p.y = THREE.MathUtils.clamp(p.y, 0.65, 3.3);
-      this.object.position.copy(p);
+      this.position.copy(p);
     });
     titlebar.addEventListener('pointerup', () => {
       this.dragState = null;
@@ -364,7 +362,7 @@ export class TutorWindow {
     });
     handle.addEventListener('pointermove', (e) => {
       if (!this.resizing) return;
-      const dist = this.object.position.distanceTo(this.world.camera.position);
+      const dist = this.position.distanceTo(this.world.camera.position);
       const wpp = this.world.worldPerPixel(dist);
       this.size.w = THREE.MathUtils.clamp(this.size.w + e.movementX * wpp, 0.45, 2.4);
       this.size.h = THREE.MathUtils.clamp(this.size.h + e.movementY * wpp, 0.3, 1.9);
@@ -383,58 +381,56 @@ export class TutorWindow {
   }
 
   /**
-   * Called each frame: face the camera, project at the right on-screen size.
-   *
-   * CSS3DRenderer treats world units as pixels and provides no perspective
-   * scaling of its own, so we compute the projection ourselves:
-   *   K        = focal length in px (viewportH / 2*tan(fov/2))
-   *   layout   = worldSize * K px
-   *   scale    = (K + d) / (K * d)   (compensates the CSS perspective so the
-   *              apparent size matches the WebGL projection exactly)
-   * Windows at or behind the camera plane are hidden.
+   * Called each frame: project the anchor to screen space with the same
+   * camera math as the WebGL scene and size the element accordingly.
    */
-  update(viewportH: number): void {
-    const cam = this.world.camera;
-    const p = this.object.position;
-    cam.getWorldDirection(_winTmp);
-    const d =
-      (p.x - cam.position.x) * _winTmp.x +
-      (p.y - cam.position.y) * _winTmp.y +
-      (p.z - cam.position.z) * _winTmp.z;
-
-    if (d < 0.35 || viewportH <= 0) {
+  update(): void {
+    const world = this.world;
+    const proj = world.project(this.position, _scratch);
+    if (!proj.visible) {
       this.element.style.visibility = 'hidden';
       return;
     }
     this.element.style.visibility = 'visible';
 
-    const K = viewportH / (2 * Math.tan(THREE.MathUtils.degToRad(cam.fov / 2)));
-    const scale = Math.min((K + d) / (K * d), 2.5);
-    this.object.scale.setScalar(scale);
-    this.object.rotation.y = Math.atan2(cam.position.x - p.x, cam.position.z - p.z);
-    this.element.style.width = `${this.size.w * K}px`;
-    this.element.style.height = `${this.size.h * K}px`;
+    const cam = world.camera;
+    const camToWin = _tmpV.copy(this.position).sub(cam.position);
+    const depth = camToWin.dot(cam.getWorldDirection(_tmpRight));
+    const K = world.viewport.clientHeight / (2 * Math.tan(THREE.MathUtils.degToRad(cam.fov / 2)));
+    const pxPerWorld = K / Math.max(depth, 0.35);
+    const w = this.size.w * pxPerWorld;
+    const h = this.size.h * pxPerWorld;
+
+    this.element.style.width = `${w}px`;
+    this.element.style.height = `${h}px`;
+    this.element.style.transform = `translate(${proj.x - w / 2}px, ${proj.y - h / 2}px)`;
+    this.element.style.zIndex = String(Math.round(1000 - depth * 100));
   }
 }
 
 const _tmpV = new THREE.Vector3();
 const _tmpRight = new THREE.Vector3();
 const _tmpUp = new THREE.Vector3();
-const _winTmp = new THREE.Vector3();
+const _scratch = { x: 0, y: 0, depth: 0, visible: false };
 
 // ---------------------------------------------------------------------------
 
 export class WindowManager {
   readonly windows = new Map<string, TutorWindow>();
   private focusedId: string | null = null;
+  private layer: HTMLElement;
   onAnswer: ((questionId: string, text: string) => void) | null = null;
 
-  constructor(private world: World) {}
+  constructor(private world: World) {
+    this.layer = document.createElement('div');
+    this.layer.className = 'windows-layer';
+    world.viewport.appendChild(this.layer);
+  }
 
   createFromSpec(spec: WindowSpec, id?: string): TutorWindow {
     const win = new TutorWindow(this.world, spec, id);
     this.placeWindow(win, spec.position ?? 'auto');
-    this.world.cssScene.add(win.object);
+    this.layer.appendChild(win.element);
     this.windows.set(win.id, win);
     win.onClose = (w) => this.close(w.id);
     win.onFocus = (w) => this.focus(w.id);
@@ -482,7 +478,7 @@ export class WindowManager {
     };
     const list = slots[side] ?? slots.center;
     const [x, y, z] = list[idx % list.length];
-    win.object.position.set(x, y, z);
+    win.position.set(x, y, z);
   }
 
   private autoSide(): string {
@@ -497,7 +493,6 @@ export class WindowManager {
   close(id: string): void {
     const win = this.windows.get(id);
     if (!win) return;
-    this.world.cssScene.remove(win.object);
     win.element.remove();
     this.windows.delete(id);
     if (this.focusedId === id) this.focusedId = null;
@@ -527,11 +522,11 @@ export class WindowManager {
   getPosition(id: string, out: THREE.Vector3): boolean {
     const win = this.windows.get(id);
     if (!win) return false;
-    out.copy(win.object.position);
+    out.copy(win.position);
     return true;
   }
 
-  update(viewportH: number): void {
-    for (const win of this.windows.values()) win.update(viewportH);
+  update(): void {
+    for (const win of this.windows.values()) win.update();
   }
 }
