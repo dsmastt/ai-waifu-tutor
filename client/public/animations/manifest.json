@@ -1,20 +1,35 @@
 {
-  "$comment": "Mixamo animation mapping. Download FBX files into client/public/animations/ and list them here. Files that don't exist are skipped (procedural fallback used). rootCorrection rotates the clip around Y if the character faces the wrong way.",
-  "base": { "file": "Breathing Idle.fbx", "rootCorrection": 0 },
+  "$comment": "Mixamo animation mapping. Paths are relative to client/public/animations/. String values load one clip; arrays load variations that are picked at random (seamless variety). rootCorrection rotates the whole clip around Y in degrees if the character faces the wrong way.",
+  "base": { "file": "animations_from_mixmo/Idle.fbx", "rootCorrection": 0 },
   "idleAlts": [
-    { "file": "Looking Around.fbx", "rootCorrection": 0 },
-    { "file": "Happy Idle.fbx", "rootCorrection": 0 }
+    { "file": "animations_from_mixmo/weight shift.fbx", "rootCorrection": 0 }
   ],
-  "clips": {
-    "talking": { "file": "Talking.fbx", "rootCorrection": 0 },
-    "thinking": { "file": "Thinking.fbx", "rootCorrection": 0 },
-    "wave": { "file": "Wave.fbx", "rootCorrection": 0 },
-    "nod": { "file": "Agreeing.fbx", "rootCorrection": 0 },
-    "shake": { "file": "Disagreeing.fbx", "rootCorrection": 0 },
-    "point": { "file": "Pointing.fbx", "rootCorrection": 0 },
-    "clap": { "file": "Clapping.fbx", "rootCorrection": 0 },
-    "shrug": { "file": "Shrug Shoulders.fbx", "rootCorrection": 0 },
-    "sad": { "file": "Sad Idle.fbx", "rootCorrection": 0 },
-    "cheer": { "file": "Cheering.fbx", "rootCorrection": 0 }
+  "talking": [
+    { "file": "animations_from_mixmo/Talking.fbx", "rootCorrection": 0 },
+    { "file": "animations_from_mixmo/Talking(1).fbx", "rootCorrection": 0 }
+  ],
+  "gestures": {
+    "thinking": [
+      { "file": "animations_from_mixmo/Thinking.fbx", "rootCorrection": 0 },
+      { "file": "animations_from_mixmo/thoughtful head shake.fbx", "rootCorrection": 0 }
+    ],
+    "wave": { "file": "animations_from_mixmo/happy hand gesture.fbx", "rootCorrection": 0 },
+    "nod": [
+      { "file": "animations_from_mixmo/head nod yes.fbx", "rootCorrection": 0 },
+      { "file": "animations_from_mixmo/acknowledging.fbx", "rootCorrection": 0 },
+      { "file": "animations_from_mixmo/lengthy head nod.fbx", "rootCorrection": 0 },
+      { "file": "animations_from_mixmo/hard head nod.fbx", "rootCorrection": 0 }
+    ],
+    "shake": [
+      { "file": "animations_from_mixmo/shaking head no.fbx", "rootCorrection": 0 },
+      { "file": "animations_from_mixmo/annoyed head shake.fbx", "rootCorrection": 0 }
+    ],
+    "shrug": [
+      { "file": "animations_from_mixmo/dismissing gesture.fbx", "rootCorrection": 0 },
+      { "file": "animations_from_mixmo/being cocky.fbx", "rootCorrection": 0 }
+    ],
+    "sad": { "file": "animations_from_mixmo/relieved sigh.fbx", "rootCorrection": 0 },
+    "angry": { "file": "animations_from_mixmo/angry gesture.fbx", "rootCorrection": 0 },
+    "lookaway": { "file": "animations_from_mixmo/look away gesture.fbx", "rootCorrection": 0 }
   }
 }

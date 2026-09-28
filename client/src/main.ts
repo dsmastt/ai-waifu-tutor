@@ -51,7 +51,7 @@ function applyQuality(quality: TutorSettings['quality']): void {
 // debug handle (test harness + power users)
 (window as unknown as { __wt: unknown }).__wt = {
   world, character, windows, hud, client, audio,
-  THREE, retargetMixamoClip,
+  THREE, retargetMixamoClip, FBXLoader,
 };
 
 const tmpVec = new THREE.Vector3();
@@ -80,14 +80,19 @@ interface ManifestEntry {
   rootCorrection?: number;
 }
 
+type ManifestSlot = ManifestEntry | ManifestEntry[];
+
 interface AnimManifest {
   base?: ManifestEntry;
   idleAlts?: ManifestEntry[];
-  clips?: Record<string, ManifestEntry>;
+  talking?: ManifestSlot;
+  gestures?: Record<string, ManifestSlot>;
 }
 
 async function loadAnimations(): Promise<void> {
   if (!character.clips) return;
+  const animErrors: string[] = [];
+  (window as unknown as { __animErrors?: string[] }).__animErrors = animErrors;
   try {
     const res = await fetch('/animations/manifest.json');
     if (!res.ok) return;
@@ -111,27 +116,45 @@ async function loadAnimations(): Promise<void> {
           entry.rootCorrection ?? 0,
         );
         if (!result) {
+          animErrors.push(`${entry.file}: no retargetable tracks`);
           console.warn(`[anim] no retargetable tracks in ${entry.file}`);
           return false;
         }
         character.clips!.register(name, result.clip, asBase);
-        console.info(`[anim] loaded ${entry.file} (${result.mapped} tracks) as ${name}`);
+        console.info(
+          `[anim] ${entry.file}: ${result.mapped} tracks, ${result.clip.duration.toFixed(1)}s -> ${name}`,
+        );
         return true;
       } catch (err) {
-        console.warn(`[anim] missing or failed ${entry.file}:`, err);
+        const msg = `${entry.file}: ${err instanceof Error ? err.message : String(err)}`;
+        animErrors.push(msg);
+        console.warn(`[anim] failed ${msg}`);
         return false;
       }
     };
 
-    let i = 0;
+    const loadSlot = async (
+      name: string,
+      slot: ManifestSlot | undefined,
+      asBase: boolean,
+    ): Promise<void> => {
+      if (!slot) return;
+      const list = Array.isArray(slot) ? slot : [slot];
+      for (const entry of list) {
+        await loadOne(name, entry, asBase);
+      }
+    };
+
+    await loadSlot('base', manifest.base, true);
     for (const alt of manifest.idleAlts ?? []) {
-      await loadOne(`idleAlt${i++}`, alt, false);
+      await loadOne('idleAlt', alt, false);
     }
-    for (const [name, entry] of Object.entries(manifest.clips ?? {})) {
-      await loadOne(name, entry, false);
+    await loadSlot('talking', manifest.talking, false);
+    for (const [name, slot] of Object.entries(manifest.gestures ?? {})) {
+      await loadSlot(name, slot, false);
     }
     if (character.clips.hasBase) {
-      console.info(`[anim] ${character.clips.names().length} clips ready`);
+      console.info(`[anim] ready: ${character.clips.names().join(', ')}`);
     } else {
       console.info('[anim] no idle clip found; using procedural animation');
     }
@@ -266,8 +289,7 @@ client.on((event) => {
         character.setExpression('happy', 1);
         character.playGesture('nod');
       } else if (event.ok === false) {
-        character.setExpression('sad', 0.5);
-        character.playGesture('shake');
+        character.setExpression('sad', 0.7);
       }
       break;
     }

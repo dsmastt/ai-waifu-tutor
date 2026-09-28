@@ -17,28 +17,28 @@ import * as THREE from 'three';
  */
 
 export const BONE_MAP: Record<string, string> = {
-  'mixamorig:Hips': 'hips',
-  'mixamorig:Spine': 'spine',
-  'mixamorig:Spine1': 'chest',
-  'mixamorig:Spine2': 'upperChest',
-  'mixamorig:Neck': 'neck',
-  'mixamorig:Head': 'head',
-  'mixamorig:LeftShoulder': 'leftShoulder',
-  'mixamorig:LeftArm': 'leftUpperArm',
-  'mixamorig:LeftForeArm': 'leftLowerArm',
-  'mixamorig:LeftHand': 'leftHand',
-  'mixamorig:LeftUpLeg': 'leftUpperLeg',
-  'mixamorig:LeftLeg': 'leftLowerLeg',
-  'mixamorig:LeftFoot': 'leftFoot',
-  'mixamorig:LeftToeBase': 'leftToes',
-  'mixamorig:RightShoulder': 'rightShoulder',
-  'mixamorig:RightArm': 'rightUpperArm',
-  'mixamorig:RightForeArm': 'rightLowerArm',
-  'mixamorig:RightHand': 'rightHand',
-  'mixamorig:RightUpLeg': 'rightUpperLeg',
-  'mixamorig:RightLeg': 'rightLowerLeg',
-  'mixamorig:RightFoot': 'rightFoot',
-  'mixamorig:RightToeBase': 'rightToes',
+  'mixamorigHips': 'hips',
+  'mixamorigSpine': 'spine',
+  'mixamorigSpine1': 'chest',
+  'mixamorigSpine2': 'upperChest',
+  'mixamorigNeck': 'neck',
+  'mixamorigHead': 'head',
+  'mixamorigLeftShoulder': 'leftShoulder',
+  'mixamorigLeftArm': 'leftUpperArm',
+  'mixamorigLeftForeArm': 'leftLowerArm',
+  'mixamorigLeftHand': 'leftHand',
+  'mixamorigLeftUpLeg': 'leftUpperLeg',
+  'mixamorigLeftLeg': 'leftLowerLeg',
+  'mixamorigLeftFoot': 'leftFoot',
+  'mixamorigLeftToeBase': 'leftToes',
+  'mixamorigRightShoulder': 'rightShoulder',
+  'mixamorigRightArm': 'rightUpperArm',
+  'mixamorigRightForeArm': 'rightLowerArm',
+  'mixamorigRightHand': 'rightHand',
+  'mixamorigRightUpLeg': 'rightUpperLeg',
+  'mixamorigRightLeg': 'rightLowerLeg',
+  'mixamorigRightFoot': 'rightFoot',
+  'mixamorigRightToeBase': 'rightToes',
 };
 
 const _q = new THREE.Quaternion();
@@ -66,8 +66,9 @@ export function retargetMixamoClip(
   const srcBones = new Map<string, THREE.Bone>();
   fbxRoot.updateMatrixWorld(true);
   fbxRoot.traverse((obj) => {
-    if ((obj as THREE.Bone).isBone && BONE_MAP[obj.name] && !srcBones.has(obj.name)) {
-      srcBones.set(obj.name, obj as THREE.Bone);
+    const norm = obj.name.replace(/:/g, '');
+    if ((obj as THREE.Bone).isBone && BONE_MAP[norm] && !srcBones.has(norm)) {
+      srcBones.set(norm, obj as THREE.Bone);
     }
   });
 
@@ -96,7 +97,7 @@ export function retargetMixamoClip(
     let parentSrc: THREE.Bone | null = null;
     let p = srcBone.parent;
     while (p) {
-      if ((p as THREE.Bone).isBone && BONE_MAP[p.name]) {
+      if ((p as THREE.Bone).isBone && BONE_MAP[p.name.replace(/:/g, '')]) {
         parentSrc = p as THREE.Bone;
         break;
       }
@@ -107,7 +108,7 @@ export function retargetMixamoClip(
       const parentTgtWorld = tgtBind.get(BONE_MAP[parentSrc.name])!;
       const parentSrcWorld = srcBind.get(parentSrc.name)!;
       offset = _q2.copy(parentTgtWorld).invert().multiply(parentSrcWorld);
-    } else if (srcName === 'mixamorig:Hips') {
+    } else if (srcName === 'mixamorigHips') {
       const tgtHips = tgtBind.get('hips');
       const srcHips = srcBind.get(srcName);
       offset = _q2.copy(tgtHips!).invert().multiply(srcHips!).multiply(rootCorrection);
@@ -124,7 +125,7 @@ export function retargetMixamoClip(
   for (const track of srcClip.tracks) {
     total++;
     const parts = track.name.split('.');
-    const srcName = parts.slice(0, -1).join('.');
+    const srcName = parts.slice(0, -1).join('.').replace(/:/g, '');
     const prop = parts[parts.length - 1];
     if (prop !== 'quaternion') continue; // keep her in place: no position tracks
     const tgtName = BONE_MAP[srcName];

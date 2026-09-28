@@ -35,4 +35,5 @@ client/public/models/*.glb
 *.swp
 
 # Mixamo animation files (user-downloaded; keep out of git)
-client/public/animations/*.fbx
+client/public/animations/**
+!client/public/animations/manifest.json

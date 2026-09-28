@@ -225,6 +225,10 @@ export class TutorCharacter {
     }
     if (key === 'thinking') {
       this.playGesture('think');
+    } else if (key === 'angry') {
+      this.playGesture('angry');
+    } else if (key === 'sad' && mult > 0.6) {
+      this.playGesture('sad');
     }
   }
 
@@ -255,6 +259,7 @@ export class TutorCharacter {
     const clipName: Record<string, string> = {
       nod: 'nod', shake: 'shake', wave: 'wave', think: 'thinking',
       shrug: 'shrug', clap: 'clap', cheer: 'cheer', sad: 'sad',
+      angry: 'angry', lookaway: 'lookaway',
     };
     if (name !== 'point' && this.clips && this.clips.has(clipName[name])) {
       this.clips.playOneShot(clipName[name]);
@@ -263,6 +268,7 @@ export class TutorCharacter {
     const durations: Record<string, number> = {
       point: 2.4, nod: 1.0, shake: 1.2, wave: 1.6,
       think: 2.8, shrug: 1.2, clap: 1.4, talk: 1.4, stretch: 2.4,
+      sad: 1.6, angry: 1.6, lookaway: 1.6,
     };
     this.gesture = {
       name,
@@ -342,18 +348,25 @@ export class TutorCharacter {
     this.headOffset.pitch *= Math.max(0, 1 - dt * 6);
     this.headOffset.roll *= Math.max(0, 1 - dt * 6);
 
-    // occasional ambient variation while idle
-    if (!this.speaking) {
+    // ambient variety while idle: cycle the idle clips, and occasionally
+    // throw in a small one-shot gesture so she never just stands there
+    if (!this.speaking && !this.clips!.oneShotActive) {
       this.idleVariantTimer -= dt;
       if (this.idleVariantTimer <= 0) {
-        this.idleVariantTimer = 16 + Math.random() * 14;
-        const alts = this.clips!.names().filter((n) => n.startsWith('idleAlt'));
-        if (alts.length) {
-          const pick = alts[Math.floor(Math.random() * alts.length)];
-          this.clips!.crossFade(pick, 0.5);
+        this.idleVariantTimer = 12 + Math.random() * 14;
+        const roll = Math.random();
+        const alts = this.clips!.variantNames('idleAlt');
+        if (roll < 0.12 && this.clips!.has('lookaway')) {
+          this.clips!.playOneShot('lookaway', 0.3);
+        } else if (roll < 0.2 && this.clips!.has('nod')) {
+          this.clips!.playOneShot('nod', 0.3);
+        } else if (alts.length) {
+          this.clips!.crossFade('idleAlt', 0.5);
           window.setTimeout(() => {
-            if (!this.speaking) this.clips?.crossFade('base', 0.5);
-          }, 6000 + Math.random() * 4000);
+            if (!this.speaking && !this.clips?.oneShotActive) {
+              this.clips?.crossFade('base', 0.5);
+            }
+          }, 6000 + Math.random() * 5000);
         }
       }
     }
