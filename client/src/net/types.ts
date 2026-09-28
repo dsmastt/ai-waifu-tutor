@@ -28,7 +28,7 @@ export type Action =
   | { type: 'gesture'; name: string; target?: string | null }
   | { type: 'expression'; name: string; intensity?: number }
   | { type: 'focus_window'; id: string }
-  | { type: 'ask_question'; prompt: string; answer_type?: string; options?: string[] | null; correct?: string | null };
+  | { type: 'ask_question'; id?: string | null; prompt: string; answer_type?: string; options?: string[] | null; correct?: string | null };
 
 export interface VisemeEvent {
   v: string;
@@ -44,6 +44,7 @@ export type ServerEvent =
   | { t: 'audio'; format: string; chunk: string }
   | { t: 'visemes'; events: VisemeEvent[] }
   | { t: 'utterance_end' }
+  | { t: 'verdict'; ok: boolean | null }
   | { t: 'turn_end' }
   | { t: 'interrupted' }
   | { t: 'settings_ok' }

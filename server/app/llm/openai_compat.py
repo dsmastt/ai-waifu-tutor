@@ -1,20 +1,212 @@
 """OpenAI-compatible streaming provider (DeepSeek by default).
 
-The model is instructed to emit newline-delimited JSON events. We accumulate
-text deltas and split on newlines; each complete line is validated against
-the protocol models. Invalid lines are dropped silently.
+The model is asked for a single JSON object {"events":[...]} of validated
+tutor events, using strict JSON output mode when the provider supports it.
+Parsing is defensive and layered:
+
+  1. incremental parsing of the root JSON object (streams events as soon as
+     each array element is complete),
+  2. newline-delimited JSON lines (models that ignore JSON mode),
+  3. whole-buffer JSON extraction at end of stream,
+  4. prose fallback: if nothing valid ever parsed, speak the text verbatim.
+
+Invalid events are dropped; nothing is ever executed.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import AsyncIterator
 
 from openai import AsyncOpenAI
 
 from ..config import Settings
-from ..protocol import LLMEvent
+from ..protocol import LLMEvent, LLMEventAdapter
 from .base import TutorProvider, LLMError
+
+
+class _ScanError(Exception):
+    pass
+
+
+def _find_complete_json(text: str, start: int) -> tuple[dict, int] | None:
+    """Return (parsed dict, end index) of the JSON value starting at `start`,
+    or None if it is not complete yet / invalid."""
+    i = start
+    n = len(text)
+    if i >= n or text[i] != "{":
+        return None
+    depth = 0
+    in_str = False
+    escape = False
+    while i < n:
+        c = text[i]
+        if in_str:
+            if escape:
+                escape = False
+            elif c == "\\":
+                escape = True
+            elif c == '"':
+                in_str = False
+        else:
+            if c == '"':
+                in_str = True
+            elif c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        value = json.loads(text[start : i + 1])
+                    except json.JSONDecodeError:
+                        return None
+                    if not isinstance(value, dict):
+                        return None
+                    return value, i + 1
+            elif c == "[":
+                depth += 1
+            elif c == "]":
+                depth -= 1
+        i += 1
+    return None
+
+
+class _EventsStreamParser:
+    """Incrementally extracts validated events from a streaming JSON body."""
+
+    def __init__(self):
+        self.buffer = ""
+        self.in_root = False
+        self.yielded = 0
+
+    def feed(self, chunk: str):
+        """Feed new text; yields (event, already_validated=True) dicts."""
+        self.buffer += chunk
+        # repair a common model slip: {"t":"action":{"type":...}} loses the
+        # comma after "action" -> {"t":"action","type":...}
+        self.buffer = self.buffer.replace('"action":{', '"action",')
+        out: list[dict] = []
+        for ev in self._extract_ndjson_lines():
+            out.append(ev)
+        for ev in self._extract_root_events():
+            out.append(ev)
+        return out
+
+    def _extract_ndjson_lines(self):
+        if self.in_root:
+            return []
+        out = []
+        while "\n" in self.buffer:
+            line, rest = self.buffer.split("\n", 1)
+            self.buffer = rest
+            line = line.strip()
+            if not line or line.startswith("```"):
+                continue
+            data = _try_json(line)
+            if data is None:
+                # not JSON yet: maybe a partial line, keep it for later
+                self.buffer = line + "\n" + self.buffer
+                break
+            ev = _validate_event(data)
+            if ev is not None:
+                out.append(ev)
+        return out
+
+    def _extract_root_events(self):
+        out = []
+        for _ in range(100):
+            # find the root object start
+            idx = self.buffer.find("{")
+            if idx < 0:
+                break
+            complete = _find_complete_json(self.buffer, idx)
+            if complete is None:
+                # root may be malformed (e.g. model dropped a key): recover
+                # individual events by scanning each '{' position
+                while True:
+                    before = len(out)
+                    out += self._scan_fragments()
+                    if len(out) == before:
+                        break
+                break
+            value, end = complete
+            self.buffer = self.buffer[end:]
+            if not self.in_root and "events" not in value and "t" not in value:
+                # a nested object we don't understand: skip it
+                continue
+            if "events" in value and isinstance(value["events"], list):
+                self.in_root = True
+                for item in value["events"]:
+                    ev = _validate_event(item) if isinstance(item, dict) else None
+                    if ev is not None:
+                        out.append(ev)
+            else:
+                ev = _validate_event(value)
+                if ev is not None:
+                    out.append(ev)
+        return out
+
+    def _scan_fragments(self):
+        """Recover one brace-balanced event object from a malformed body."""
+        text = self.buffer
+        i = 0
+        while i < len(text):
+            i = text.find("{", i)
+            if i < 0:
+                break
+            found = _find_complete_json(text, i)
+            if found is not None:
+                value, end = found
+                i = end
+                if isinstance(value, dict) and "t" in value:
+                    ev = _validate_event(value)
+                    if ev is not None:
+                        self.buffer = text[end:]
+                        return [ev]
+                continue
+            i += 1
+        return []
+
+    def flush(self):
+        """End of stream: try the whole buffer, then fall back to prose."""
+        out: list[dict] = []
+        text = self.buffer
+        self.buffer = ""
+        if text.strip():
+            data = _try_json(text)
+            if isinstance(data, dict) and isinstance(data.get("events"), list):
+                for item in data["events"]:
+                    ev = _validate_event(item) if isinstance(item, dict) else None
+                    if ev is not None:
+                        out.append(ev)
+            else:
+                ev = _validate_event(data) if isinstance(data, dict) else None
+                if ev is not None:
+                    out.append(ev)
+        if not out and self.yielded == 0:
+            # prose fallback: speak the text verbatim (never execute)
+            from ..protocol import SpeechEvent
+
+            if text.strip():
+                out.append(SpeechEvent(t="speech", text=text.strip()).model_dump())
+        return out
+
+
+def _try_json(text: str):
+    t = text.strip().strip("`")
+    try:
+        return json.loads(t)
+    except json.JSONDecodeError:
+        return None
+
+
+def _validate_event(data: dict):
+    try:
+        event = LLMEventAdapter.validate_python(data)
+    except Exception:
+        return None
+    return event.model_dump()
 
 
 class OpenAICompatProvider(TutorProvider):
@@ -26,61 +218,49 @@ class OpenAICompatProvider(TutorProvider):
             base_url=settings.llm_base_url,
         )
         self._model = settings.llm_model
+        self._json_mode = settings.llm_json_mode
         self._lock = asyncio.Lock()
-
-    def _parse_line_robust(self, line: str):
-        """Parse one model line: strict NDJSON first, then JSON extraction,
-        then a prose fallback (treated as plain speech)."""
-        line = line.strip()
-        if not line:
-            return None
-        event = self._parse_line(line)
-        if event is not None:
-            return event
-
-        # strip markdown fences
-        if line.startswith("```"):
-            line = line.strip("`")
-        start = line.find("{")
-        end = line.rfind("}")
-        if start >= 0 and end > start:
-            event = self._parse_line(line[start : end + 1])
-            if event is not None:
-                return event
-
-        # prose fallback: model ignored the protocol; speak the text verbatim
-        from ..protocol import SpeechEvent
-
-        return SpeechEvent(t="speech", text=line)
 
     async def stream_turn(
         self, messages: list[dict], temperature: float
     ) -> AsyncIterator[LLMEvent]:
         async with self._lock:
-            try:
-                stream = await self._client.chat.completions.create(
-                    model=self._model,
-                    messages=messages,
-                    temperature=temperature,
-                    stream=True,
-                )
-            except Exception as exc:  # network/auth/provider errors
-                raise LLMError(f"LLM request failed: {exc}") from exc
-
-            buffer = ""
+            stream = await self._open_stream(messages, temperature)
+            parser = _EventsStreamParser()
             async for chunk in stream:
                 if not chunk.choices:
                     continue
                 delta = chunk.choices[0].delta
                 if not delta or not delta.content:
                     continue
-                buffer += delta.content
-                while "\n" in buffer:
-                    line, buffer = buffer.split("\n", 1)
-                    event = self._parse_line_robust(line)
-                    if event is not None:
-                        yield event
-            # flush any trailing partial line (usually whitespace only)
-            event = self._parse_line_robust(buffer)
-            if event is not None:
-                yield event
+                for ev in parser.feed(delta.content):
+                    parser.yielded += 1
+                    yield _to_event(ev)
+            for ev in parser.flush():
+                parser.yielded += 1
+                yield _to_event(ev)
+
+    async def _open_stream(self, messages: list[dict], temperature: float):
+        kwargs: dict = {
+            "model": self._model,
+            "messages": messages,
+            "temperature": temperature,
+            "stream": True,
+        }
+        if self._json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
+        try:
+            return await self._client.chat.completions.create(**kwargs)
+        except Exception as exc:
+            if not self._json_mode:
+                raise LLMError(f"LLM request failed: {exc}") from exc
+            # provider may not support JSON mode: retry once without it
+            kwargs.pop("response_format", None)
+            try:
+                return await self._client.chat.completions.create(**kwargs)
+            except Exception as exc2:
+                raise LLMError(f"LLM request failed: {exc2}") from exc2
+
+
+def _to_event(data: dict) -> LLMEvent:
+    return LLMEventAdapter.validate_python(data)

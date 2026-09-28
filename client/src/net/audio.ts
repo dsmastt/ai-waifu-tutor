@@ -17,6 +17,10 @@ interface PlayingUtterance {
  * Plays streamed TTS audio sentence-by-sentence and exposes, for lip sync:
  *  - the active viseme (from server-provided phoneme timings)
  *  - the current speech energy (RMS) as a fallback driver
+ *
+ * Browser autoplay: the AudioContext may start suspended until the first
+ * user gesture. Queued audio is kept and playback starts as soon as the
+ * context runs (tick() pumps).
  */
 export class AudioManager {
   private ctx: AudioContext | null = null;
@@ -26,6 +30,8 @@ export class AudioManager {
   private current: PlayingUtterance | null = null;
   private energy = 0;
   private lastEnergy: number[] = [];
+  private hintedMuted = false;
+  onMuted: (() => void) | null = null;
 
   get ready(): boolean {
     return this.ctx !== null;
@@ -35,20 +41,32 @@ export class AudioManager {
     return this.current !== null || this.queue.length > 0 || this.pending !== null;
   }
 
+  get suspended(): boolean {
+    return !!this.ctx && this.ctx.state !== 'running';
+  }
+
+  get hasBufferedAudio(): boolean {
+    return this.queue.length > 0 || this.pending !== null;
+  }
+
+  private createContext(): boolean {
+    if (this.ctx) return true;
+    try {
+      this.ctx = new AudioContext();
+      return true;
+    } catch (err) {
+      console.warn('AudioContext unavailable:', err);
+      return false;
+    }
+  }
+
   async ensure(): Promise<boolean> {
-    if (!this.ctx) {
+    if (!this.createContext()) return false;
+    if (this.ctx!.state === 'suspended') {
       try {
-        this.ctx = new AudioContext();
-      } catch (err) {
-        console.warn('AudioContext unavailable:', err);
-        return false;
-      }
-      if (this.ctx.state === 'suspended') {
-        try {
-          await this.ctx.resume();
-        } catch {
-          /* stays suspended until user gesture; fine */
-        }
+        await this.ctx!.resume();
+      } catch {
+        /* stays suspended until a real user gesture; tick() pumps later */
       }
     }
     return true;
@@ -65,17 +83,19 @@ export class AudioManager {
   }
 
   async finishUtterance(): Promise<void> {
-    if (!this.ctx || !this.pending || !this.pending.b64) {
+    if (!this.createContext() || !this.pending || !this.pending.b64) {
       this.pending = null;
       return;
     }
     const pending = this.pending;
     this.pending = null;
     try {
+      const ctx = this.ctx;
+      if (!ctx) return;
       const raw = atob(pending.b64);
       const bytes = new Uint8Array(raw.length);
       for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-      const buffer = await this.ctx.decodeAudioData(bytes.buffer);
+      const buffer = await ctx.decodeAudioData(bytes.buffer);
       this.queue.push(buffer);
       this.queueVisemes.push(pending.visemes);
       this.pump();
@@ -87,6 +107,7 @@ export class AudioManager {
   private pump(): void {
     if (this.current || this.queue.length === 0) return;
     const ctx = this.ctx!;
+    if (ctx.state !== 'running') return;
     const buffer = this.queue.shift()!;
     const visemes = this.queueVisemes.shift()!;
 
@@ -111,7 +132,11 @@ export class AudioManager {
 
   /** Called every frame: returns the active viseme name + weight (0..1). */
   tick(): { v: string; weight: number } | null {
-    if (!this.ctx || !this.current) return null;
+    if (!this.ctx || !this.current) {
+      this.pump(); // retry if the context just resumed
+      if (this.current) this.muteHint();
+      return null;
+    }
     const t = this.ctx.currentTime - this.current.startedAt;
     if (t < 0 || t > this.current.duration) return null;
 
@@ -134,6 +159,12 @@ export class AudioManager {
       return { v: 'aa', weight: w };
     }
     return { v: viseme, weight: weight };
+  }
+
+  private muteHint(): void {
+    if (this.hintedMuted || !this.hasBufferedAudio || !this.suspended) return;
+    this.hintedMuted = true;
+    this.onMuted?.();
   }
 
   private updateEnergy(): void {
@@ -170,7 +201,13 @@ export class AudioManager {
 
   async resumeIfNeeded(): Promise<void> {
     if (this.ctx && this.ctx.state === 'suspended') {
-      await this.ctx.resume();
+      try {
+        await this.ctx.resume();
+        this.hintedMuted = false;
+        this.pump();
+      } catch {
+        /* ignore */
+      }
     }
   }
 }

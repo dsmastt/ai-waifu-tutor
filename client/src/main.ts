@@ -69,22 +69,44 @@ const tmpVec = new THREE.Vector3();
 
 // ------------------------------------------------------------------ actions
 
+let autoGazeTimer: number | null = null;
+
+function gazeAtWindow(winId: string | null | undefined, seconds: number): void {
+  const id = winId ?? windows.lastFocused?.id;
+  if (!id) return;
+  if (!windows.getPosition(id, tmpVec)) return;
+  character.lookAt('window', tmpVec);
+  // optionally gesture at it if it sits off to a side
+  if (Math.abs(tmpVec.x) > 1.2 && Math.random() < 0.4) {
+    character.playGesture('point', tmpVec.clone());
+  }
+  if (autoGazeTimer !== null) window.clearTimeout(autoGazeTimer);
+  autoGazeTimer = window.setTimeout(() => character.lookAt('me'), seconds * 1000);
+}
+
 function handleAction(a: ServerEvent & { t: 'action' }): void {
   const action = a.a;
   switch (action.type) {
-    case 'create_window':
-      windows.createFromSpec(action.win, action.id ?? undefined);
+    case 'create_window': {
+      const win = windows.createFromSpec(action.win, action.id ?? undefined);
+      gazeAtWindow(win.id, 3);
       break;
+    }
     case 'close_window':
       windows.close(action.id);
       break;
     case 'focus_window':
       windows.focus(action.id);
+      gazeAtWindow(action.id, 2);
       break;
     case 'expression':
       character.setExpression(action.name, action.intensity ?? 1);
       break;
     case 'look_at': {
+      if (autoGazeTimer !== null) {
+        window.clearTimeout(autoGazeTimer);
+        autoGazeTimer = null;
+      }
       if (action.target === 'me') {
         character.lookAt('me');
       } else if (action.target === 'board') {
@@ -110,7 +132,7 @@ function handleAction(a: ServerEvent & { t: 'action' }): void {
       break;
     }
     case 'ask_question': {
-      windows.createFromSpec({
+      const win = windows.createFromSpec({
         kind: 'question',
         title: 'Question',
         question: {
@@ -120,7 +142,9 @@ function handleAction(a: ServerEvent & { t: 'action' }): void {
           correct: action.correct ?? null,
         },
         position: 'center',
-      });
+      }, action.id ?? undefined);
+      // she shows you the question, then turns back to you
+      gazeAtWindow(win.id, 1.6);
       break;
     }
     default:
@@ -160,8 +184,20 @@ client.on((event) => {
     case 'status':
       turnActive = true;
       dropAudio = false;
+      character.setListening(false);
+      character.setExpression('thinking', 0.9);
       hud.setStatus('thinking');
       break;
+    case 'verdict': {
+      if (event.ok === true) {
+        character.setExpression('happy', 1);
+        character.playGesture('nod');
+      } else if (event.ok === false) {
+        character.setExpression('sad', 0.5);
+        character.playGesture('shake');
+      }
+      break;
+    }
     case 'speech_delta':
       hud.appendSubtitle(event.text);
       break;
@@ -184,6 +220,7 @@ client.on((event) => {
     case 'turn_end':
       turnActive = false;
       dropAudio = false;
+      character.setListening(false);
       hud.setStatus('idle');
       hud.clearSubtitle();
       break;
@@ -226,6 +263,7 @@ hud.onSend = (text) => {
   }
   turnActive = false;
   dropAudio = false;
+  character.setListening(true);
   client.sendUserMessage(text);
   void audio.interrupt();
   audio.ensure().catch(() => {
@@ -249,6 +287,7 @@ hud.onSettings = (s) => {
 windows.onAnswer = (questionId, text) => {
   turnActive = false;
   dropAudio = false;
+  character.setListening(true);
   client.sendAnswer(questionId, text);
   void audio.interrupt();
 };
@@ -256,6 +295,7 @@ windows.onAnswer = (questionId, text) => {
 // ------------------------------------------------------------------ loop
 
 let lastTalkGesture = 0;
+let lastSmile = 0;
 
 world.onFrame(({ dt }) => {
   character.update(dt, performance.now() / 1000, world.camera);
@@ -268,25 +308,32 @@ world.onFrame(({ dt }) => {
   if (vis) character.setViseme(vis.v, vis.weight);
   else character.setViseme('', 0);
 
-  // natural hand gestures while explaining
+  // natural hand gestures + warm micro-smiles while explaining
   const now = performance.now() / 1000;
-  if (speaking && now - lastTalkGesture > 7 + Math.random() * 9) {
-    lastTalkGesture = now;
-    character.playGesture('talk');
+  if (speaking) {
+    if (now - lastTalkGesture > 7 + Math.random() * 9) {
+      lastTalkGesture = now;
+      character.playGesture('talk');
+    }
+    if (now - lastSmile > 11 + Math.random() * 8) {
+      lastSmile = now;
+      character.setExpression('happy', 0.35);
+    }
   }
 
   if (!speaking && !turnActive) hud.setStatus('idle');
   else if (speaking && turnActive) hud.setStatus('speaking');
 });
 
-// resume audio context on first interaction (autoplay policy)
-window.addEventListener(
-  'pointerdown',
-  () => {
-    void audio.ensure();
-    void audio.resumeIfNeeded();
-  },
-  { once: true },
-);
+// browser autoplay: unlock audio on any interaction and hint when muted
+const unlockAudio = () => {
+  void audio.ensure();
+  void audio.resumeIfNeeded();
+};
+window.addEventListener('pointerdown', unlockAudio);
+window.addEventListener('keydown', unlockAudio);
+audio.onMuted = () => {
+  hud.showNotice('Sound is muted until you click anywhere in the page.', 6000);
+};
 
 world.start();

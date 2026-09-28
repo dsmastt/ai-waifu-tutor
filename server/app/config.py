@@ -32,6 +32,7 @@ class Settings:
     llm_model: str = "deepseek-chat"
     llm_api_key: str = ""
     llm_temperature: float = 0.8
+    llm_json_mode: bool = True
     tts_voice: str = "af_bella"
     tts_speed: float = 1.0
     host: str = "127.0.0.1"
@@ -61,8 +62,14 @@ def load_settings() -> Settings:
     def f(name: str, default: str) -> str:
         return os.environ.get(name, default).strip() or default
 
-    data_dir = Path(f("DATA_DIR", str(REPO_ROOT / "server" / "data"))).resolve()
-    cache_dir = Path(f("CACHE_DIR", str(REPO_ROOT / "server" / "cache"))).resolve()
+    def resolve(path_value: str, default: Path) -> Path:
+        path = Path(path_value)
+        if not path.is_absolute():
+            path = REPO_ROOT / path
+        return path.resolve()
+
+    data_dir = resolve(f("DATA_DIR", "server/data"), REPO_ROOT / "server" / "data")
+    cache_dir = resolve(f("CACHE_DIR", "server/cache"), REPO_ROOT / "server" / "cache")
     data_dir.mkdir(parents=True, exist_ok=True)
     cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -71,6 +78,7 @@ def load_settings() -> Settings:
         llm_model=f("LLM_MODEL", "deepseek-chat"),
         llm_api_key=f("LLM_API_KEY", ""),
         llm_temperature=float(f("LLM_TEMPERATURE", "0.8")),
+        llm_json_mode=f("LLM_JSON_MODE", "1").lower() not in ("0", "false", "no"),
         tts_voice=f("TTS_VOICE", "af_bella"),
         tts_speed=float(f("TTS_SPEED", "1.0")),
         host=f("HOST", "127.0.0.1"),

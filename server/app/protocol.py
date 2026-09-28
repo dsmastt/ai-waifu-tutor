@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal, Union
 
-from pydantic import BaseModel, Field, TypeAdapter
+from pydantic import BaseModel, Field, TypeAdapter, model_validator
 
 # ---------------------------------------------------------------------------
 # Window specifications (AI -> app)
@@ -114,6 +114,19 @@ class SpeechEvent(BaseModel):
 class ActionEvent(BaseModel):
     t: Literal["action"]
     a: Action
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_flattened(cls, data):
+        """Tolerate models that drop the 'a' wrapper:
+        {"t":"action","type":"look_at",...} -> {"t":"action","a":{"type":...}}"""
+        if (
+            isinstance(data, dict)
+            and data.get("t") == "action"
+            and "a" not in data
+        ):
+            return {"t": "action", "a": {k: v for k, v in data.items() if k != "t"}}
+        return data
 
 
 LLMEvent = Annotated[Union[SpeechEvent, ActionEvent], Field(discriminator="t")]

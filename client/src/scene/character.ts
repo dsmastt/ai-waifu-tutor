@@ -99,6 +99,8 @@ export class TutorCharacter {
   // idle life
   private idleGestureTimer = 8;
   private lookAroundTimer = 4;
+  private listening = false;
+  private listenLean = 0;
 
   // breath
   private breathePhase = 0;
@@ -234,7 +236,7 @@ export class TutorCharacter {
   playGesture(name: string, target?: THREE.Vector3 | null): void {
     const durations: Record<string, number> = {
       point: 2.4, nod: 1.0, shake: 1.2, wave: 1.6,
-      think: 2.8, shrug: 1.2, clap: 1.4, talk: 1.4,
+      think: 2.8, shrug: 1.2, clap: 1.4, talk: 1.4, stretch: 2.4,
     };
     this.gesture = {
       name,
@@ -259,7 +261,23 @@ export class TutorCharacter {
     this.updateGestures(dt, time);
     this.updateExpressions(dt);
     this.updatePose();
+
+    // listening lean (head tilt + slight forward lean toward the student)
+    const listenTarget = this.listening ? 1 : 0;
+    this.listenLean += (listenTarget - this.listenLean) * Math.min(1, dt * 6);
+    if (this.listenLean > 0.01) {
+      this.headOffset.roll += 0.09 * this.listenLean;
+      this.headOffset.pitch -= 0.04 * this.listenLean;
+    }
+
+    // whole-body bob
+    this.group.position.y = Math.sin(this.breathePhase * 1.1) * 0.006;
+
     this.vrm.update(dt);
+  }
+
+  setListening(active: boolean): void {
+    this.listening = active;
   }
 
   private updateIdleLife(dt: number): void {
@@ -281,8 +299,9 @@ export class TutorCharacter {
       if (this.idleGestureTimer <= 0) {
         this.idleGestureTimer = 10 + Math.random() * 16;
         const r = Math.random();
-        if (r < 0.35) this.playGesture('nod');
-        else if (r < 0.55) this.playGesture('talk');
+        if (r < 0.3) this.playGesture('nod');
+        else if (r < 0.5) this.playGesture('talk');
+        else if (r < 0.56) this.playGesture('stretch');
       }
     }
   }
@@ -384,7 +403,11 @@ export class TutorCharacter {
       if (rest) {
         const desired = rest
           .clone()
-          .multiply(_q.setFromEuler(new THREE.Euler(0, this.curBodyYaw, roll)));
+          .multiply(_q.setFromEuler(new THREE.Euler(
+            this.listenLean * 0.05,
+            this.curBodyYaw,
+            roll,
+          )));
         this.setBoneWorldRotation(chest, desired);
       }
     }
@@ -537,6 +560,23 @@ export class TutorCharacter {
           .addScaledVector(UP, 0.02)
           .normalize();
         this.poseArm('right', _dirUpper, _dirLower, 0, e, dt);
+        break;
+      }
+      case 'stretch': {
+        // arms up and out, head back slightly, like a lazy stretch
+        this.headOffset.pitch = -0.08 * e;
+        _dirUpper.set(0, 0, 0)
+          .addScaledVector(r, -0.75)
+          .addScaledVector(UP, -0.35)
+          .addScaledVector(f, 0.05)
+          .normalize();
+        this.poseArm('left', _dirUpper, null, 0.35, e, dt);
+        _dirUpper.set(0, 0, 0)
+          .addScaledVector(r, 0.75)
+          .addScaledVector(UP, -0.35)
+          .addScaledVector(f, 0.05)
+          .normalize();
+        this.poseArm('right', _dirUpper, null, 0.35, e, dt);
         break;
       }
       case 'talk': {

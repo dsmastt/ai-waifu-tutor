@@ -88,6 +88,7 @@ class TutorBrain:
         elif verdict is False:
             verdict_note = "The submitted answer is INCORRECT."
         self._memory.append_message("user", f"My answer: {answer_text}")
+        yield {"t": "verdict", "ok": verdict}
         context = (
             f"The student submitted this answer to question id '{question_id}': "
             f'"{answer_text}".\n'
