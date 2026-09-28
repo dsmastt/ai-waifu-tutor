@@ -1,48 +1,45 @@
 import * as THREE from 'three';
 
 /**
- * Mixamo -> VRM animation retargeting.
+ * Mixamo -> VRM animation retargeting (exact world-space method).
  *
- * Mixamo FBX files use the `mixamorig:*` skeleton and quaternion tracks per
- * bone. VRM exposes a normalized humanoid skeleton (T-pose) with names like
- * `hips`, `spine`, `chest`, `leftUpperArm`, ... Animations are retargeted by
- * renaming tracks and applying a per-bone static offset computed from both
- * skeletons' bind poses:
+ * Mixamo bones carry baked rotations in their bind pose (e.g. arm bones are
+ * rotated 120 deg around X in the T-pose), so static parent offsets cannot
+ * retarget them. Instead, per sample we reconstruct the source's world pose
+ * from its local track values, map it into the target's frame through both
+ * skeletons' bind orientations, and solve the target's local rotations:
  *
- *   L_target(t) = inv(P_target_bind) * P_src_bind * L_src(t)
+ *   W_t(bone) * inv(W_s(bone)) * world_s(bone, t) = world_t(bone, t)
+ *   L_t(bone, t) = inv(world_t(parent, t)) * world_t(bone, t)
  *
- * where P_* are the bind world rotations of the mapped parent bones. This is
- * the standard static-offset retarget; both skeletons are T-poses so it is
- * accurate for idle/gesture clips.
+ * Both hierarchies are walked parent-first, so the target's animated parent
+ * is used exactly. Position tracks are dropped (clips stay in place).
  */
 
 export const BONE_MAP: Record<string, string> = {
-  'mixamorigHips': 'hips',
-  'mixamorigSpine': 'spine',
-  'mixamorigSpine1': 'chest',
-  'mixamorigSpine2': 'upperChest',
-  'mixamorigNeck': 'neck',
-  'mixamorigHead': 'head',
-  'mixamorigLeftShoulder': 'leftShoulder',
-  'mixamorigLeftArm': 'leftUpperArm',
-  'mixamorigLeftForeArm': 'leftLowerArm',
-  'mixamorigLeftHand': 'leftHand',
-  'mixamorigLeftUpLeg': 'leftUpperLeg',
-  'mixamorigLeftLeg': 'leftLowerLeg',
-  'mixamorigLeftFoot': 'leftFoot',
-  'mixamorigLeftToeBase': 'leftToes',
-  'mixamorigRightShoulder': 'rightShoulder',
-  'mixamorigRightArm': 'rightUpperArm',
-  'mixamorigRightForeArm': 'rightLowerArm',
-  'mixamorigRightHand': 'rightHand',
-  'mixamorigRightUpLeg': 'rightUpperLeg',
-  'mixamorigRightLeg': 'rightLowerLeg',
-  'mixamorigRightFoot': 'rightFoot',
-  'mixamorigRightToeBase': 'rightToes',
+  mixamorigHips: 'hips',
+  mixamorigSpine: 'spine',
+  mixamorigSpine1: 'chest',
+  mixamorigSpine2: 'upperChest',
+  mixamorigNeck: 'neck',
+  mixamorigHead: 'head',
+  mixamorigLeftShoulder: 'leftShoulder',
+  mixamorigLeftArm: 'leftUpperArm',
+  mixamorigLeftForeArm: 'leftLowerArm',
+  mixamorigLeftHand: 'leftHand',
+  mixamorigLeftUpLeg: 'leftUpperLeg',
+  mixamorigLeftLeg: 'leftLowerLeg',
+  mixamorigLeftFoot: 'leftFoot',
+  mixamorigLeftToeBase: 'leftToes',
+  mixamorigRightShoulder: 'rightShoulder',
+  mixamorigRightArm: 'rightUpperArm',
+  mixamorigRightForeArm: 'rightLowerArm',
+  mixamorigRightHand: 'rightHand',
+  mixamorigRightUpLeg: 'rightUpperLeg',
+  mixamorigRightLeg: 'rightLowerLeg',
+  mixamorigRightFoot: 'rightFoot',
+  mixamorigRightToeBase: 'rightToes',
 };
-
-const _q = new THREE.Quaternion();
-const _q2 = new THREE.Quaternion();
 
 export interface RetargetResult {
   clip: THREE.AnimationClip;
@@ -50,103 +47,183 @@ export interface RetargetResult {
   total: number;
 }
 
-/**
- * Retarget a Mixamo clip onto the VRM normalized skeleton.
- * `targetBones` maps VRM normalized bone names -> THREE.Bone.
- * `rootCorrection` rotates the whole animation around Y (in degrees) to fix
- * character facing mismatches.
- */
+interface SrcBone {
+  name: string;
+  bone: THREE.Bone;
+  parent: SrcBone | null;
+  tgtName: string | null;
+  track: THREE.QuaternionKeyframeTrack | null;
+}
+
+interface TgtBone {
+  name: string;
+  bone: THREE.Bone;
+  parent: TgtBone | null;
+}
+
+const _q = new THREE.Quaternion();
+const _q2 = new THREE.Quaternion();
+const _v = new THREE.Vector3();
+const _axis = new THREE.Vector3();
+
+const FPS = 30;
+
 export function retargetMixamoClip(
   fbxRoot: THREE.Object3D,
   srcClip: THREE.AnimationClip,
   targetBones: Map<string, THREE.Bone>,
   rootCorrectionDeg = 0,
 ): RetargetResult | null {
-  // gather source bones by name
-  const srcBones = new Map<string, THREE.Bone>();
   fbxRoot.updateMatrixWorld(true);
+
+  // --- source hierarchy (mapped bones only, parent-first) ---
+  const byName = new Map<string, THREE.Bone>();
   fbxRoot.traverse((obj) => {
     const norm = obj.name.replace(/:/g, '');
-    if ((obj as THREE.Bone).isBone && BONE_MAP[norm] && !srcBones.has(norm)) {
-      srcBones.set(norm, obj as THREE.Bone);
+    if ((obj as THREE.Bone).isBone && BONE_MAP[norm] && !byName.has(norm)) {
+      byName.set(norm, obj as THREE.Bone);
     }
   });
 
-  // bind world rotations (source + target)
-  const srcBind = new Map<string, THREE.Quaternion>();
-  for (const [name, bone] of srcBones) {
-    srcBind.set(name, bone.getWorldQuaternion(new THREE.Quaternion()));
-  }
-  const tgtBind = new Map<string, THREE.Quaternion>();
-  for (const [name, bone] of targetBones) {
-    tgtBind.set(name, bone.getWorldQuaternion(new THREE.Quaternion()));
-  }
-
-  const rootCorrection = _q.setFromAxisAngle(
-    new THREE.Vector3(0, 1, 0),
-    THREE.MathUtils.degToRad(rootCorrectionDeg),
-  );
-
-  // per-source-bone offset
-  const offsets = new Map<string, THREE.Quaternion>();
-  for (const [srcName, srcBone] of srcBones) {
-    const tgtName = BONE_MAP[srcName];
-    if (!tgtName || !targetBones.has(tgtName)) continue;
-
-    // nearest mapped ancestor (parent bind chain)
-    let parentSrc: THREE.Bone | null = null;
-    let p = srcBone.parent;
-    while (p) {
-      if ((p as THREE.Bone).isBone && BONE_MAP[p.name.replace(/:/g, '')]) {
-        parentSrc = p as THREE.Bone;
-        break;
-      }
-      p = p.parent;
-    }
-    let offset: THREE.Quaternion;
-    if (parentSrc && srcBind.has(parentSrc.name) && targetBones.has(BONE_MAP[parentSrc.name])) {
-      const parentTgtWorld = tgtBind.get(BONE_MAP[parentSrc.name])!;
-      const parentSrcWorld = srcBind.get(parentSrc.name)!;
-      offset = _q2.copy(parentTgtWorld).invert().multiply(parentSrcWorld);
-    } else if (srcName === 'mixamorigHips') {
-      const tgtHips = tgtBind.get('hips');
-      const srcHips = srcBind.get(srcName);
-      offset = _q2.copy(tgtHips!).invert().multiply(srcHips!).multiply(rootCorrection);
-    } else {
-      continue;
-    }
-    offsets.set(srcName, offset.clone());
-  }
-
-  // rebuild tracks
-  const tracks: THREE.KeyframeTrack[] = [];
-  let mapped = 0;
-  let total = 0;
+  const srcList: SrcBone[] = [];
+  const trackMap = new Map<string, THREE.QuaternionKeyframeTrack>();
   for (const track of srcClip.tracks) {
-    total++;
     const parts = track.name.split('.');
-    const srcName = parts.slice(0, -1).join('.').replace(/:/g, '');
-    const prop = parts[parts.length - 1];
-    if (prop !== 'quaternion') continue; // keep her in place: no position tracks
-    const tgtName = BONE_MAP[srcName];
-    const offset = tgtName ? offsets.get(srcName) : undefined;
-    if (!tgtName || !offset) continue;
-
-    const times = (track as THREE.QuaternionKeyframeTrack).times.slice();
-    const srcValues = (track as THREE.QuaternionKeyframeTrack).values;
-    const values = new Float32Array(srcValues.length);
-    for (let i = 0; i < srcValues.length; i += 4) {
-      _q.set(srcValues[i], srcValues[i + 1], srcValues[i + 2], srcValues[i + 3]);
-      _q.premultiply(offset);
-      values[i] = _q.x;
-      values[i + 1] = _q.y;
-      values[i + 2] = _q.z;
-      values[i + 3] = _q.w;
+    if (parts[parts.length - 1] === 'quaternion') {
+      trackMap.set(parts.slice(0, -1).join('.').replace(/:/g, ''), track as THREE.QuaternionKeyframeTrack);
     }
-    tracks.push(new THREE.QuaternionKeyframeTrack(`${tgtName}.quaternion`, times, values));
-    mapped++;
+  }
+  // include bones that only appear as parents (no own track)
+  const seen = new Set<string>();
+  const visit = (name: string, parent: SrcBone | null): SrcBone | null => {
+    if (seen.has(name)) return null;
+    seen.add(name);
+    const bone = byName.get(name);
+    if (!bone) return null;
+    const tgtName = BONE_MAP[name];
+    if (tgtName && !targetBones.has(tgtName)) return null;
+    const node: SrcBone = { name, bone, parent, tgtName, track: trackMap.get(name) ?? null };
+    srcList.push(node);
+    for (const child of bone.children) {
+      const cname = child.name.replace(/:/g, '');
+      if (byName.has(cname) || trackMap.has(cname)) visit(cname, node);
+    }
+    return node;
+  };
+  if (byName.has('mixamorigHips')) visit('mixamorigHips', null);
+  if (srcList.length === 0) return null;
+
+  // --- target hierarchy mirror ---
+  const tgtList: TgtBone[] = [];
+  for (const src of srcList) {
+    if (!src.tgtName) continue;
+    const bone = targetBones.get(src.tgtName)!;
+    let parent: TgtBone | null = null;
+    if (src.parent) {
+      const p = src.parent;
+      // find the nearest mapped ancestor that exists in tgtList
+      let probe: SrcBone | null = p;
+      while (probe) {
+        const found = tgtList.find((t) => t.name === probe!.tgtName);
+        if (found) {
+          parent = found;
+          break;
+        }
+        probe = probe.parent;
+      }
+    }
+    tgtList.push({ name: src.tgtName, bone, parent });
   }
 
-  if (mapped === 0) return null;
-  return { clip: new THREE.AnimationClip(srcClip.name, srcClip.duration, tracks), mapped, total };
+  // --- bind world orientations ---
+  const srcBind = new Map<SrcBone, THREE.Quaternion>();
+  for (const s of srcList) {
+    srcBind.set(s, s.bone.getWorldQuaternion(new THREE.Quaternion()));
+  }
+  const tgtBind = new Map<TgtBone, THREE.Quaternion>();
+  for (const t of tgtList) {
+    tgtBind.set(t, t.bone.getWorldQuaternion(new THREE.Quaternion()));
+  }
+
+  const rootCorrection = _q.setFromAxisAngle(_axis.set(0, 1, 0), THREE.MathUtils.degToRad(rootCorrectionDeg));
+
+  // --- resample ---
+  const duration = Math.max(srcClip.duration, 0.1);
+  const frames = Math.max(2, Math.ceil(duration * FPS));
+  const times = new Float32Array(frames);
+  for (let f = 0; f < frames; f++) times[f] = (duration * f) / (frames - 1);
+
+  const samples = new Map<string, Float32Array>(); // tgtName -> frames*4
+  const srcWorld = new Map<SrcBone, THREE.Quaternion>();
+  const srcLocal = new Map<SrcBone, THREE.Quaternion>();
+  const tgtWorld = new Map<TgtBone, THREE.Quaternion>();
+
+  const interpolants = new Map<string, THREE.Interpolant>();
+  const at = (track: THREE.QuaternionKeyframeTrack | null, t: number, out: THREE.Quaternion): THREE.Quaternion => {
+    if (!track) return out.set(0, 0, 0, 1);
+    let interpolant = interpolants.get(track.name);
+    if (!interpolant) {
+      interpolant = track.createInterpolant();
+      interpolants.set(track.name, interpolant);
+    }
+    interpolant.evaluate(t);
+    const buf = interpolant.resultBuffer;
+    return out.set(buf[0], buf[1], buf[2], buf[3]);
+  };
+
+  for (let f = 0; f < frames; f++) {
+    const t = times[f];
+    // source world pose from locals (parent-first)
+    for (const s of srcList) {
+      const local = at(s.track, t, _q);
+      srcLocal.set(s, local.clone());
+      if (s.parent) {
+        srcWorld.set(s, _q2.copy(srcWorld.get(s.parent)!).multiply(local));
+      } else {
+        srcWorld.set(s, local.clone());
+      }
+    }
+    // map to target
+    for (const tgt of tgtList) {
+      // find the corresponding source node
+      const src = srcList.find((s) => s.tgtName === tgt.name)!;
+      const worldT = _q.copy(tgtBind.get(tgt)!).multiply(_q2.copy(srcBind.get(src)!).invert()).multiply(srcWorld.get(src)!);
+      let local: THREE.Quaternion;
+      if (tgt.parent) {
+        local = _q2.copy(tgtWorld.get(tgt.parent)!).invert().multiply(worldT);
+      } else {
+        local = worldT.clone();
+        if (tgt.name === 'hips') local.premultiply(rootCorrection);
+      }
+      tgtWorld.set(tgt, worldT.clone());
+      let arr = samples.get(tgt.name);
+      if (!arr) {
+        arr = new Float32Array(frames * 4);
+        samples.set(tgt.name, arr);
+      }
+      arr[f * 4] = local.x;
+      arr[f * 4 + 1] = local.y;
+      arr[f * 4 + 2] = local.z;
+      arr[f * 4 + 3] = local.w;
+    }
+
+    if (f === 0) {
+      // sanity: reconstructed source bind should match the loaded bind pose
+      const err = srcWorld.get(srcList[0])!.angleTo(srcBind.get(srcList[0])!);
+      if (err > 0.35) {
+        console.warn(
+          `[anim] bind/track mismatch in ${srcClip.name}: ${err.toFixed(2)} rad`,
+        );
+      }
+    }
+  }
+
+  // build tracks
+  const tracks: THREE.KeyframeTrack[] = [];
+  for (const tgt of tgtList) {
+    const arr = samples.get(tgt.name);
+    if (!arr) continue;
+    tracks.push(new THREE.QuaternionKeyframeTrack(`${tgt.name}.quaternion`, times.slice(), arr));
+  }
+  return { clip: new THREE.AnimationClip(srcClip.name, duration, tracks), mapped: tracks.length, total: srcClip.tracks.length };
 }
