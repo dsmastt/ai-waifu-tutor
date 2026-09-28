@@ -45,6 +45,10 @@ export interface RetargetResult {
   clip: THREE.AnimationClip;
   mapped: number;
   total: number;
+  /** Hips vertical bob: times (s) + values (FBX units, cm). */
+  hipsY: { times: Float32Array; values: Float32Array } | null;
+  /** Convert hipsY values (cm) to world meters for the target character. */
+  bobScale: number;
 }
 
 interface SrcBone {
@@ -225,5 +229,41 @@ export function retargetMixamoClip(
     if (!arr) continue;
     tracks.push(new THREE.QuaternionKeyframeTrack(`${tgt.name}.quaternion`, times.slice(), arr));
   }
-  return { clip: new THREE.AnimationClip(srcClip.name, duration, tracks), mapped: tracks.length, total: srcClip.tracks.length };
+
+  // hips vertical bob (kept so feet plant correctly on the floor)
+  let hipsY: RetargetResult['hipsY'] = null;
+  const hipsSrc = srcList.find((s) => s.name === 'mixamorigHips');
+  const hipsPosTrack = hipsSrc
+    ? (srcClip.tracks.find(
+        (t) => t.name === 'mixamorigHips.position' || t.name === 'mixamorig:Hips.position',
+      ) as THREE.VectorKeyframeTrack | undefined)
+    : undefined;
+  if (hipsPosTrack) {
+    const interpolant = hipsPosTrack.createInterpolant();
+    const ys: number[] = [];
+    for (let f = 0; f < frames; f++) {
+      const buf = interpolant.evaluate(times[f]) as unknown as Float32Array;
+      ys.push(buf[1]); // Y is the up axis after FBX conversion
+    }
+    hipsY = { times: times.slice(), values: new Float32Array(ys) };
+  }
+
+  // scale: mixamo rigs are ~180 cm tall; the target is ~1.62 world units
+  let mixamoHeightCm = 180;
+  const head = byName.get('mixamorigHead');
+  const foot = byName.get('mixamorigLeftFoot');
+  if (head && foot) {
+    const hy = head.getWorldPosition(_v).y;
+    const fy = foot.getWorldPosition(_v).y;
+    mixamoHeightCm = Math.max(50, Math.abs(hy - fy));
+  }
+  const bobScale = 1.62 / (mixamoHeightCm / 100);
+
+  return {
+    clip: new THREE.AnimationClip(srcClip.name, duration, tracks),
+    mapped: tracks.length,
+    total: srcClip.tracks.length,
+    hipsY,
+    bobScale,
+  };
 }

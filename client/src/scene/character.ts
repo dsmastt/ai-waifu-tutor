@@ -37,6 +37,8 @@ const _qParent = new THREE.Quaternion();
 const _tmpQuatSmooth = new THREE.Quaternion();
 const _qFromTo = new THREE.Quaternion();
 const _qTwist = new THREE.Quaternion();
+const _deltaDir = new THREE.Vector3();
+const _deltaDir2 = new THREE.Vector3();
 const _v = new THREE.Vector3();
 const _axis = new THREE.Vector3();
 const _tmpA = new THREE.Vector3();
@@ -109,6 +111,8 @@ export class TutorCharacter {
   private lookAroundTimer = 4;
   private listening = false;
   private listenLean = 0;
+  private footSamples: number[] = [];
+  private groundBias = 0;
 
   // breath
   private breathePhase = 0;
@@ -311,19 +315,21 @@ export class TutorCharacter {
     const clipsActive =
       !!this.clips && (this.clips.hasBase || this.clips.oneShotActive);
 
-    if (clipsActive) this.clips!.update(dt);
+    let clipBob = 0;
+    if (this.clips && clipsActive) {
+      clipBob = this.clips.update(dt);
+    }
     this.updateGaze(dt, time, camera);
     this.updateIdleLife(dt);
     this.updateBlink(dt, time);
-    const proceduralNeeded =
-      !clipsActive ||
-      (this.gesture !== null && ['point', 'talk', 'stretch'].includes(this.gesture.name));
-    if (proceduralNeeded) {
+    if (!clipsActive) {
       this.updateBreathing(dt, time);
-      this.updateGestures(dt, time);
     } else {
       this.updateClipGestures(dt);
     }
+    // gestures always run: with clips, procedural arms are delta-based and
+    // compose on top of the animated pose
+    this.updateGestures(dt, time, clipsActive);
     this.updateExpressions(dt);
     this.updatePose();
 
@@ -335,10 +341,36 @@ export class TutorCharacter {
       this.headOffset.pitch -= 0.04 * this.listenLean;
     }
 
-    // whole-body bob
-    this.group.position.y = Math.sin(this.breathePhase * 1.1) * 0.006;
+    // vertical grounding: procedural breathing bob, or the clip's hip bob
+    // plus a self-calibrating bias that settles her lowest foot on the floor
+    // (retargeted clips inherit Mixamo's leg proportions, so feet hover)
+    if (clipsActive) {
+      this.updateGroundBias(dt);
+      this.group.position.y = clipBob + this.groundBias;
+    } else {
+      this.group.position.y = Math.sin(this.breathePhase * 1.1) * 0.006;
+    }
 
     this.vrm.update(dt);
+  }
+
+  private updateGroundBias(dt: number): void {
+    const vrm = this.vrm;
+    if (!vrm) return;
+    // measure foot height WITHOUT the group offset (it still reflects the
+    // previous frame's offset, which is close enough)
+    let minFoot = Infinity;
+    for (const name of ['leftFoot', 'rightFoot'] as const) {
+      const b = vrm.humanoid!.getRawBoneNode(name as never);
+      if (b) minFoot = Math.min(minFoot, b.getWorldPosition(_deltaDir).y);
+    }
+    if (!Number.isFinite(minFoot)) return;
+    const localFoot = minFoot - this.group.position.y;
+    this.footSamples.push(localFoot);
+    if (this.footSamples.length > 120) this.footSamples.shift();
+    const lowest = Math.min(...this.footSamples);
+    const target = THREE.MathUtils.clamp(0.015 - lowest, -0.25, 0.25);
+    this.groundBias += (target - this.groundBias) * Math.min(1, dt * 2.5);
   }
 
   private updateClipGestures(dt: number): void {
@@ -520,13 +552,13 @@ export class TutorCharacter {
     }
   }
 
-  private updateGestures(dt: number, _time: number): void {
+  private updateGestures(dt: number, _time: number, clipsActive: boolean): void {
     const g = this.gesture;
     if (!g) {
       this.headOffset.yaw *= Math.max(0, 1 - dt * 6);
       this.headOffset.pitch *= Math.max(0, 1 - dt * 6);
       this.headOffset.roll *= Math.max(0, 1 - dt * 6);
-      this.idleArms(dt);
+      if (!clipsActive) this.idleArms(dt);
       return;
     }
     g.t += dt;
@@ -706,8 +738,9 @@ export class TutorCharacter {
   }
 
   /**
-   * Pose an arm by aiming its segments along world-space directions.
-   * Rest-agnostic: works for T-pose and A-pose models alike.
+   * Pose an arm by rotating its segments toward world-space directions.
+   * Delta-based: works on top of any animated pose (reads the bones' current
+   * orientation and rotates toward the target), and from any rest pose.
    */
   private poseArm(
     side: 'left' | 'right',
@@ -720,37 +753,52 @@ export class TutorCharacter {
   ): void {
     const upperName = side + 'UpperArm';
     const lowerName = side + 'LowerArm';
+    const handName = side + 'Hand';
     const upper = this.bone(upperName);
     const lower = this.bone(lowerName);
-    const restUpper = upper && this.restWorld.get(upper);
-    const restLower = lower && this.restWorld.get(lower);
-    const restUpperDir = this.restArmDirs.get(upperName);
-    const restLowerDir = this.restArmDirs.get(lowerName);
-    if (!upper || !lower || !restUpper || !restLower || !restUpperDir || !restLowerDir) {
-      return;
-    }
+    const hand = this.bone(handName);
+    if (!upper || !lower) return;
+    if (weight < 0.01) return;
+
+    const upperWorld = upper.getWorldQuaternion(new THREE.Quaternion());
+    const shoulder = upper.getWorldPosition(new THREE.Vector3());
+    const elbow = lower.getWorldPosition(new THREE.Vector3());
+    const upperLen = this.armLengths.get(upperName) ?? 0.4;
 
     const dir = upperDir.clone().normalize();
-    const desiredUpper = restUpper
+    const curUpperDir = _deltaDir.copy(elbow).sub(shoulder);
+    if (curUpperDir.lengthSq() < 1e-6) {
+      curUpperDir.set(0, -1, 0);
+    }
+    curUpperDir.normalize();
+    const desiredUpper = upperWorld
       .clone()
-      .multiply(fromToQuat(restUpperDir, dir, _qFromTo));
-    if (weight < 1) desiredUpper.slerp(restUpper, 1 - weight);
+      .multiply(fromToQuat(curUpperDir, dir, _qFromTo));
+    if (weight < 1) desiredUpper.slerp(upperWorld, 1 - weight);
 
     let ldir: THREE.Vector3;
     if (lowerDir) {
       ldir = lowerDir.clone().normalize();
     } else {
-      // bend the elbow: forearm aims between the upper arm direction and up
       ldir = dir.clone().lerp(UP, THREE.MathUtils.clamp(bend, 0, 1)).normalize();
     }
-    const desiredLower = restLower
+
+    const lowerWorld = lower.getWorldQuaternion(new THREE.Quaternion());
+    let curLowerDir: THREE.Vector3;
+    if (hand) {
+      curLowerDir = _deltaDir2.copy(hand.getWorldPosition(new THREE.Vector3())).sub(elbow);
+    } else {
+      curLowerDir = _deltaDir2.copy(dir).multiplyScalar(upperLen * 0.9);
+    }
+    if (curLowerDir.lengthSq() < 1e-6) curLowerDir.set(0, -1, 0);
+    curLowerDir.normalize();
+    const desiredLower = lowerWorld
       .clone()
-      .multiply(fromToQuat(restLowerDir, ldir, _qFromTo));
+      .multiply(fromToQuat(curLowerDir, ldir, _qFromTo));
     if (lowerTwist !== 0) {
-      // roll the forearm around its own axis to fix palm orientation
       desiredLower.multiply(_qTwist.setFromAxisAngle(ldir, lowerTwist));
     }
-    if (weight < 1) desiredLower.slerp(restLower, 1 - weight);
+    if (weight < 1) desiredLower.slerp(lowerWorld, 1 - weight);
 
     this.smoothTo(upper, desiredUpper, dt);
     this.smoothTo(lower, desiredLower, dt);

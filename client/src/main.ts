@@ -120,7 +120,14 @@ async function loadAnimations(): Promise<void> {
           console.warn(`[anim] no retargetable tracks in ${entry.file}`);
           return false;
         }
-        character.clips!.register(name, result.clip, asBase);
+        character.clips!.register(
+          name,
+          result.clip,
+          asBase,
+          result.hipsY
+            ? { times: result.hipsY.times, values: result.hipsY.values, bobScale: result.bobScale }
+            : null,
+        );
         console.info(
           `[anim] ${entry.file}: ${result.mapped} tracks, ${result.clip.duration.toFixed(1)}s -> ${name}`,
         );
