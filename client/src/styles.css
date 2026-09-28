@@ -60,8 +60,8 @@ body {
   position: absolute;
   display: flex;
   flex-direction: column;
-  min-width: 220px;
-  max-width: 560px;
+  min-width: 0;
+  max-width: none;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -69,13 +69,11 @@ body {
   backdrop-filter: blur(14px);
   overflow: hidden;
   opacity: 0;
-  transform: translateY(12px);
-  transition: opacity 0.35s ease, transform 0.35s ease;
+  transition: opacity 0.35s ease;
 }
 
 .wt-window.visible {
   opacity: 1;
-  transform: translateY(0);
 }
 
 .wt-window.focused {

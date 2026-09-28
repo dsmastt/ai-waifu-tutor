@@ -382,23 +382,45 @@ export class TutorWindow {
     this.element.classList.toggle('focused', focused);
   }
 
-  /** Called each frame: face the camera, keep CSS size matching world size. */
+  /**
+   * Called each frame: face the camera, project at the right on-screen size.
+   *
+   * CSS3DRenderer treats world units as pixels and provides no perspective
+   * scaling of its own, so we compute the projection ourselves:
+   *   K        = focal length in px (viewportH / 2*tan(fov/2))
+   *   layout   = worldSize * K px
+   *   scale    = (K + d) / (K * d)   (compensates the CSS perspective so the
+   *              apparent size matches the WebGL projection exactly)
+   * Windows at or behind the camera plane are hidden.
+   */
   update(viewportH: number): void {
     const cam = this.world.camera;
     const p = this.object.position;
-    const dist = Math.max(0.4, p.distanceTo(cam.position));
-    const fov = THREE.MathUtils.degToRad(cam.fov / 2);
-    const pxPerWorld = viewportH / (2 * dist * Math.tan(fov));
+    cam.getWorldDirection(_winTmp);
+    const d =
+      (p.x - cam.position.x) * _winTmp.x +
+      (p.y - cam.position.y) * _winTmp.y +
+      (p.z - cam.position.z) * _winTmp.z;
 
+    if (d < 0.35 || viewportH <= 0) {
+      this.element.style.visibility = 'hidden';
+      return;
+    }
+    this.element.style.visibility = 'visible';
+
+    const K = viewportH / (2 * Math.tan(THREE.MathUtils.degToRad(cam.fov / 2)));
+    const scale = Math.min((K + d) / (K * d), 2.5);
+    this.object.scale.setScalar(scale);
     this.object.rotation.y = Math.atan2(cam.position.x - p.x, cam.position.z - p.z);
-    this.element.style.width = `${this.size.w * pxPerWorld}px`;
-    this.element.style.height = `${this.size.h * pxPerWorld}px`;
+    this.element.style.width = `${this.size.w * K}px`;
+    this.element.style.height = `${this.size.h * K}px`;
   }
 }
 
 const _tmpV = new THREE.Vector3();
 const _tmpRight = new THREE.Vector3();
 const _tmpUp = new THREE.Vector3();
+const _winTmp = new THREE.Vector3();
 
 // ---------------------------------------------------------------------------
 
@@ -440,18 +462,27 @@ export class WindowManager {
     }
     (win as TutorWindow & { slot?: { side: string; idx: number } }).slot = { side, idx };
 
-    const pos = new THREE.Vector3();
-    if (side === 'left') {
-      const az = 0.95 * Math.PI - idx * 0.3;
-      pos.set(Math.sin(az) * 2.05, 1.45 + idx * 0.24, Math.cos(az) * 2.05);
-    } else if (side === 'right') {
-      const az = -0.95 * Math.PI + idx * 0.3;
-      pos.set(Math.sin(az) * 2.05, 1.45 + idx * 0.24, Math.cos(az) * 2.05);
-    } else {
-      const off = idx * 0.35 - 0.2;
-      pos.set(off, 2.5, 1.15);
-    }
-    win.object.position.copy(pos);
+    // Slots around the tutor, sized to fit the default camera framing.
+    // The character stands at the origin facing +Z (the camera).
+    const slots: Record<string, [number, number, number][]> = {
+      left: [
+        [1.58, 1.48, 0.05],
+        [1.22, 2.02, -0.22],
+        [1.74, 1.02, 0.3],
+      ],
+      right: [
+        [-1.58, 1.48, 0.05],
+        [-1.22, 2.02, -0.22],
+        [-1.74, 1.02, 0.3],
+      ],
+      center: [
+        [-1.32, 1.95, 0.55],
+        [1.32, 1.95, 0.55],
+      ],
+    };
+    const list = slots[side] ?? slots.center;
+    const [x, y, z] = list[idx % list.length];
+    win.object.position.set(x, y, z);
   }
 
   private autoSide(): string {

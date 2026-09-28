@@ -149,18 +149,22 @@ class TutorBrain:
 
         async def produce() -> None:
             try:
+                log.info("produce: starting provider stream")
                 async for event in self._provider.stream_turn(
                     messages, self._settings.llm_temperature
                 ):
                     if self._interrupt.is_set():
+                        log.info("produce: interrupt flag set, stopping")
                         return
                     await queue.put(event)
             except asyncio.CancelledError:
+                log.info("produce: cancelled")
                 return
             except Exception as exc:
                 log.exception("LLM stream failed")
                 await queue.put(exc)
             finally:
+                log.info("produce: ending")
                 await queue.put(None)
 
         producer = asyncio.create_task(produce())

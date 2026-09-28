@@ -62,6 +62,7 @@ export class TutorCharacter {
   private bones = new Map<string, THREE.Bone | null>();
   private restWorld = new Map<THREE.Bone, THREE.Quaternion>();
   private restArmDirs = new Map<string, THREE.Vector3>();
+  private armLengths = new Map<string, number>();
   private forward = new THREE.Vector3(0, 0, 1);
   private right = new THREE.Vector3(-1, 0, 0);
   private hasExpression = new Map<string, boolean>();
@@ -177,6 +178,7 @@ export class TutorCharacter {
         const p1 = A.getWorldPosition(new THREE.Vector3());
         const p2 = B.getWorldPosition(new THREE.Vector3());
         this.restArmDirs.set(a, p2.sub(p1).normalize());
+        this.armLengths.set(a, p1.distanceTo(p2));
       }
     }
   }
@@ -508,16 +510,25 @@ export class TutorCharacter {
         this.headOffset.pitch = 0.12 * e;
         const headBone = this.bone('head');
         const shoulder = this.bone('rightUpperArm');
+        const upperLen = this.armLengths.get('rightUpperArm') ?? 0.4;
         if (headBone && shoulder) {
+          // a point in front of the mouth
           headBone.getWorldPosition(_tmpA);
           _tmpB.set(0, 0, 0)
             .addScaledVector(f, 0.16)
-            .addScaledVector(UP, -0.24)
-            .addScaledVector(r, -0.06);
-          _tmpA.add(_tmpB); // in front of the mouth
-          shoulder.getWorldPosition(_tmpB);
-          _dirUpper.copy(_tmpA).sub(_tmpB).normalize();
-          this.poseArm('right', _dirUpper, null, 0.55, e, dt);
+            .addScaledVector(UP, -0.26)
+            .addScaledVector(r, -0.04);
+          const chin = _tmpA.add(_tmpB);
+          shoulder.getWorldPosition(_tmpB); // shoulder position
+          // upper arm hangs mostly down, elbow stays low and natural
+          _dirUpper.set(0, 0, 0)
+            .addScaledVector(f, 0.18)
+            .addScaledVector(UP, -0.92)
+            .addScaledVector(r, -0.12)
+            .normalize();
+          const elbow = _tmpB.clone().addScaledVector(_dirUpper, upperLen);
+          _dirLower.copy(chin).sub(elbow).normalize();
+          this.poseArm('right', _dirUpper, _dirLower, 0, e, dt);
         }
         break;
       }

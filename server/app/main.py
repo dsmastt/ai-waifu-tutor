@@ -150,10 +150,12 @@ async def ws_endpoint(ws: WebSocket) -> None:
 
             # a new user message or answer supersedes any active turn
             if turn_task is not None and not turn_task.done():
+                log.info("superseding active turn")
                 turn_task.cancel()
                 await asyncio.gather(turn_task, return_exceptions=True)
 
             if msg.t == "user_message":
+                log.info("starting turn for: %r", msg.text[:60])
                 turn_task = asyncio.create_task(forward(brain.run_turn(msg.text)))
             elif msg.t == "answer":
                 turn_task = asyncio.create_task(

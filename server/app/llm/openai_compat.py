@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from typing import AsyncIterator
 
 from openai import AsyncOpenAI
@@ -24,6 +25,8 @@ from openai import AsyncOpenAI
 from ..config import Settings
 from ..protocol import LLMEvent, LLMEventAdapter
 from .base import TutorProvider, LLMError
+
+log = logging.getLogger(__name__)
 
 
 class _ScanError(Exception):
@@ -225,20 +228,34 @@ class OpenAICompatProvider(TutorProvider):
         self, messages: list[dict], temperature: float
     ) -> AsyncIterator[LLMEvent]:
         async with self._lock:
-            stream = await self._open_stream(messages, temperature)
-            parser = _EventsStreamParser()
-            async for chunk in stream:
-                if not chunk.choices:
-                    continue
-                delta = chunk.choices[0].delta
-                if not delta or not delta.content:
-                    continue
-                for ev in parser.feed(delta.content):
+            for attempt in range(2):
+                log.info("provider: lock acquired, requesting stream (attempt %d)", attempt + 1)
+                stream = await self._open_stream(messages, temperature)
+                parser = _EventsStreamParser()
+                raw_len = 0
+                async for chunk in stream:
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+                    if not delta or not delta.content:
+                        continue
+                    raw_len += len(delta.content)
+                    for ev in parser.feed(delta.content):
+                        parser.yielded += 1
+                        yield _to_event(ev)
+                for ev in parser.flush():
                     parser.yielded += 1
                     yield _to_event(ev)
-            for ev in parser.flush():
-                parser.yielded += 1
-                yield _to_event(ev)
+                log.info(
+                    "provider: stream complete, %d events, %d raw chars",
+                    parser.yielded, raw_len,
+                )
+                if parser.yielded > 0 or raw_len > 0:
+                    return
+                # provider sometimes returns an empty completion right after
+                # an aborted stream; retry once
+                log.warning("provider: empty completion, retrying")
+                await asyncio.sleep(0.6)
 
     async def _open_stream(self, messages: list[dict], temperature: float):
         kwargs: dict = {

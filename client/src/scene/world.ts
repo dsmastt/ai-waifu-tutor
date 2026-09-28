@@ -23,8 +23,8 @@ export class World {
   private callbacks: ((info: FrameInfo) => void)[] = [];
 
   private yaw = 0;
-  private distance = 3.1;
-  private targetDistance = 3.1;
+  private distance = 3.6;
+  private targetDistance = 3.6;
   private pitch = -0.06;
   private dragging = false;
   private lastX = 0;
@@ -49,7 +49,7 @@ export class World {
     container.appendChild(this.cssRenderer.domElement);
 
     this.camera = new THREE.PerspectiveCamera(
-      38,
+      44,
       container.clientWidth / container.clientHeight,
       0.1,
       60,
@@ -179,7 +179,7 @@ export class World {
       (e) => {
         this.targetDistance = THREE.MathUtils.clamp(
           this.targetDistance * (1 + e.deltaY * 0.001),
-          2.0,
+          2.4,
           6.5,
         );
       },
