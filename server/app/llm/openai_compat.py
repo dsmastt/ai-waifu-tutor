@@ -23,7 +23,7 @@ from typing import AsyncIterator
 from openai import AsyncOpenAI
 
 from ..config import Settings
-from ..protocol import LLMEvent, LLMEventAdapter
+from ..protocol import LLMEvent, LLMEventAdapter, SpeechEvent
 from .base import TutorProvider, LLMError
 
 log = logging.getLogger(__name__)
@@ -80,12 +80,14 @@ class _EventsStreamParser:
 
     def __init__(self):
         self.buffer = ""
+        self.raw = ""
         self.in_root = False
         self.yielded = 0
 
     def feed(self, chunk: str):
         """Feed new text; yields (event, already_validated=True) dicts."""
         self.buffer += chunk
+        self.raw += chunk
         # repair a common model slip: {"t":"action":{"type":...}} loses the
         # comma after "action" -> {"t":"action","type":...}
         self.buffer = self.buffer.replace('"action":{', '"action",')
@@ -172,7 +174,7 @@ class _EventsStreamParser:
         return []
 
     def flush(self):
-        """End of stream: try the whole buffer, then fall back to prose."""
+        """End of stream: try the remaining buffer, then fall back to prose."""
         out: list[dict] = []
         text = self.buffer
         self.buffer = ""
@@ -188,11 +190,13 @@ class _EventsStreamParser:
                 if ev is not None:
                     out.append(ev)
         if not out and self.yielded == 0:
-            # prose fallback: speak the text verbatim (never execute)
+            # nothing at all parsed from this response: if the whole answer
+            # is plain prose, speak it verbatim (never execute)
             from ..protocol import SpeechEvent
 
-            if text.strip():
-                out.append(SpeechEvent(t="speech", text=text.strip()).model_dump())
+            t = self.raw.strip()
+            if t and not t.startswith("{") and not t.startswith("["):
+                out.append(SpeechEvent(t="speech", text=t[:2000]).model_dump())
         return out
 
 
@@ -210,6 +214,14 @@ def _validate_event(data: dict):
     except Exception:
         return None
     return event.model_dump()
+
+
+_CORRECTIVE_NOTE = (
+    "Your previous response could not be parsed. You MUST output exactly one "
+    'JSON object: {"events":[{"t":"speech","text":"..."},{"t":"action",'
+    '"type":"...",...}]} — valid JSON only, nothing else. Do not explain, '
+    "just output the JSON."
+)
 
 
 class OpenAICompatProvider(TutorProvider):
@@ -232,30 +244,40 @@ class OpenAICompatProvider(TutorProvider):
                 log.info("provider: lock acquired, requesting stream (attempt %d)", attempt + 1)
                 stream = await self._open_stream(messages, temperature)
                 parser = _EventsStreamParser()
-                raw_len = 0
                 async for chunk in stream:
                     if not chunk.choices:
                         continue
                     delta = chunk.choices[0].delta
                     if not delta or not delta.content:
                         continue
-                    raw_len += len(delta.content)
                     for ev in parser.feed(delta.content):
                         parser.yielded += 1
                         yield _to_event(ev)
                 for ev in parser.flush():
                     parser.yielded += 1
                     yield _to_event(ev)
-                log.info(
-                    "provider: stream complete, %d events, %d raw chars",
-                    parser.yielded, raw_len,
-                )
-                if parser.yielded > 0 or raw_len > 0:
+                if parser.yielded > 0:
+                    log.info("provider: stream complete, %d events", parser.yielded)
                     return
-                # provider sometimes returns an empty completion right after
-                # an aborted stream; retry once
-                log.warning("provider: empty completion, retrying")
-                await asyncio.sleep(0.6)
+                # the response produced no usable events: log it and retry
+                # once with a corrective instruction
+                log.warning(
+                    "provider: no valid events parsed (raw=%r)",
+                    parser.raw[:200],
+                )
+                if attempt == 0:
+                    messages = messages + [{"role": "system", "content": _CORRECTIVE_NOTE}]
+                    await asyncio.sleep(0.6)
+
+            # both attempts produced nothing usable: never go fully silent
+            log.warning("provider: giving up after 2 unparseable responses")
+            yield SpeechEvent(
+                t="speech",
+                text=(
+                    "Sorry, I lost my train of thought there. "
+                    "Could you say that again?"
+                ),
+            )
 
     async def _open_stream(self, messages: list[dict], temperature: float):
         kwargs: dict = {
