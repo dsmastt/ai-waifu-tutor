@@ -32,10 +32,27 @@ interface ActiveGesture {
 }
 
 const _q = new THREE.Quaternion();
-const _qX = new THREE.Quaternion();
-const _qY = new THREE.Quaternion();
-const _qZ = new THREE.Quaternion();
+const _qParent = new THREE.Quaternion();
+const _tmpQuatSmooth = new THREE.Quaternion();
+const _qFromTo = new THREE.Quaternion();
 const _v = new THREE.Vector3();
+const _axis = new THREE.Vector3();
+const _tmpA = new THREE.Vector3();
+const _tmpB = new THREE.Vector3();
+const _dirUpper = new THREE.Vector3();
+const _dirLower = new THREE.Vector3();
+const UP = new THREE.Vector3(0, 1, 0);
+
+function fromToQuat(from: THREE.Vector3, to: THREE.Vector3, out: THREE.Quaternion): THREE.Quaternion {
+  const d = from.dot(to);
+  if (d < -0.999999) {
+    _axis.set(0, 1, 0);
+    if (Math.abs(_axis.dot(from)) > 0.9) _axis.set(1, 0, 0);
+    return out.set(_axis.x, _axis.y, _axis.z, 0).normalize();
+  }
+  _axis.crossVectors(from, to);
+  return out.set(_axis.x, _axis.y, _axis.z, 1 + d).normalize();
+}
 
 export class TutorCharacter {
   vrm: VRM | null = null;
@@ -44,7 +61,9 @@ export class TutorCharacter {
 
   private bones = new Map<string, THREE.Bone | null>();
   private restWorld = new Map<THREE.Bone, THREE.Quaternion>();
+  private restArmDirs = new Map<string, THREE.Vector3>();
   private forward = new THREE.Vector3(0, 0, 1);
+  private right = new THREE.Vector3(-1, 0, 0);
   private hasExpression = new Map<string, boolean>();
   private blinkName: string | null = null;
 
@@ -120,6 +139,7 @@ export class TutorCharacter {
     if (hips) {
       hips.getWorldQuaternion(_q);
       this.forward.set(0, 0, 1).applyQuaternion(_q).setY(0).normalize();
+      this.right.crossVectors(this.forward, UP).normalize();
     }
   }
 
@@ -139,6 +159,22 @@ export class TutorCharacter {
       this.bones.set(n, node);
       if (node) {
         this.restWorld.set(node, node.getWorldQuaternion(new THREE.Quaternion()));
+      }
+    }
+    // arm segment directions at rest (works for T-pose and A-pose alike)
+    const pairs: [string, string][] = [
+      ['rightUpperArm', 'rightLowerArm'],
+      ['leftUpperArm', 'leftLowerArm'],
+      ['rightLowerArm', 'rightHand'],
+      ['leftLowerArm', 'leftHand'],
+    ];
+    for (const [a, b] of pairs) {
+      const A = this.bone(a);
+      const B = this.bone(b);
+      if (A && B) {
+        const p1 = A.getWorldPosition(new THREE.Vector3());
+        const p2 = B.getWorldPosition(new THREE.Vector3());
+        this.restArmDirs.set(a, p2.sub(p1).normalize());
       }
     }
   }
@@ -386,52 +422,136 @@ export class TutorCharacter {
     this.headOffset.pitch = 0;
     this.headOffset.roll = 0;
 
+    const f = this.forward;
+    const r = this.right;
+
     switch (g.name) {
       case 'point': {
-        const az = this.targetAzimuth(g.target);
-        this.armPose('rightUpperArm', az, -1.35, 0.1, e);
-        this.armPose('rightLowerArm', 0.05, -1.15, 0, e);
+        // pick the arm on the target's side; default to her right arm
+        let side: 'left' | 'right' = 'right';
+        const shoulder = this.bone('rightUpperArm');
+        if (shoulder) {
+          shoulder.getWorldPosition(_tmpA);
+          if (g.target) {
+            _dirUpper.copy(g.target).sub(_tmpA).normalize();
+            side = _dirUpper.dot(r) < 0 ? 'left' : 'right';
+            if (side === 'left') {
+              const lShoulder = this.bone('leftUpperArm');
+              if (lShoulder) {
+                lShoulder.getWorldPosition(_tmpA);
+                _dirUpper.copy(g.target).sub(_tmpA).normalize();
+              }
+            }
+          } else {
+            // forward, out to her right, slightly up
+            _dirUpper
+              .set(0, 0, 0)
+              .addScaledVector(f, 1.0)
+              .addScaledVector(r, 0.5)
+              .addScaledVector(UP, -0.55)
+              .normalize();
+          }
+        } else {
+          _dirUpper.set(0.4, -0.5, 1).normalize();
+        }
+        this.poseArm(side, _dirUpper, null, 0.02, e, dt);
         break;
       }
       case 'wave': {
-        const wob = Math.sin(t * 11) * 0.45 * e;
-        this.armPose('rightUpperArm', 0, -1.25, -0.15, e);
-        this.armPose('rightLowerArm', wob, -0.5, 0, e);
+        const wob = Math.sin(t * 11) * 0.7 * e;
+        _dirUpper.set(0, 0, 0)
+          .addScaledVector(f, 0.25)
+          .addScaledVector(r, 0.25)
+          .addScaledVector(UP, -0.75)
+          .normalize();
+        _dirLower.set(0, 0, 0)
+          .addScaledVector(f, 0.7)
+          .addScaledVector(r, wob)
+          .addScaledVector(UP, 0.4)
+          .normalize();
+        this.poseArm('right', _dirUpper, _dirLower, 0, e, dt);
         break;
       }
       case 'nod':
         this.headOffset.pitch = Math.sin((t / d) * Math.PI * 2) * 0.14 * e;
+        this.idleArms(dt);
         break;
       case 'shake':
         this.headOffset.yaw = Math.sin((t / d) * Math.PI * 2.4) * 0.2 * e;
+        this.idleArms(dt);
         break;
       case 'think': {
         this.headOffset.roll = 0.14 * e;
         this.headOffset.pitch = 0.12 * e;
-        this.armPose('rightUpperArm', 0.35, -0.85, 0.15, e);
-        this.armPose('rightLowerArm', 0.25, -1.55, 0.1, e);
+        const headBone = this.bone('head');
+        const shoulder = this.bone('rightUpperArm');
+        if (headBone && shoulder) {
+          headBone.getWorldPosition(_tmpA);
+          _tmpB.set(0, 0, 0)
+            .addScaledVector(f, 0.16)
+            .addScaledVector(UP, -0.24)
+            .addScaledVector(r, -0.06);
+          _tmpA.add(_tmpB); // in front of the mouth
+          shoulder.getWorldPosition(_tmpB);
+          _dirUpper.copy(_tmpA).sub(_tmpB).normalize();
+          this.poseArm('right', _dirUpper, null, 0.55, e, dt);
+        }
         break;
       }
       case 'shrug': {
-        this.headOffset.roll = 0.1 * e;
-        this.armPose('leftUpperArm', 0, -0.3, 0.45, e);
-        this.armPose('rightUpperArm', 0, -0.3, -0.45, e);
-        this.armPose('leftLowerArm', 0, -0.5, 0.2, e);
-        this.armPose('rightLowerArm', 0, -0.5, -0.2, e);
+        _dirUpper.set(0, 0, 0)
+          .addScaledVector(r, -0.5)
+          .addScaledVector(UP, -0.82)
+          .addScaledVector(f, 0.08)
+          .normalize();
+        this.poseArm('left', _dirUpper, null, 0.12, e, dt);
+        _dirUpper.set(0, 0, 0)
+          .addScaledVector(r, 0.5)
+          .addScaledVector(UP, -0.82)
+          .addScaledVector(f, 0.08)
+          .normalize();
+        this.poseArm('right', _dirUpper, null, 0.12, e, dt);
         break;
       }
       case 'clap': {
-        const cl = Math.sin(t * 16) * 0.06 * e;
-        this.armPose('leftUpperArm', 0.5, -1.2, 0.25, e);
-        this.armPose('rightUpperArm', 0.5, -1.2, -0.25, e);
-        this.armPose('leftLowerArm', 0.2, -0.35 + cl, 0.1, e);
-        this.armPose('rightLowerArm', 0.2, -0.35 - cl, -0.1, e);
+        const cl = Math.sin(t * 16) * 0.05 * e;
+        _dirUpper.set(0, 0, 0)
+          .addScaledVector(f, 0.78)
+          .addScaledVector(UP, -0.55)
+          .addScaledVector(r, 0.3)
+          .normalize();
+        _dirLower.set(0, 0, 0)
+          .addScaledVector(f, 1.0)
+          .addScaledVector(r, 0.1 + cl)
+          .addScaledVector(UP, 0.02)
+          .normalize();
+        this.poseArm('left', _dirUpper, _dirLower, 0, e, dt);
+        _dirUpper.set(0, 0, 0)
+          .addScaledVector(f, 0.78)
+          .addScaledVector(UP, -0.55)
+          .addScaledVector(r, -0.3)
+          .normalize();
+        _dirLower.set(0, 0, 0)
+          .addScaledVector(f, 1.0)
+          .addScaledVector(r, -0.1 - cl)
+          .addScaledVector(UP, 0.02)
+          .normalize();
+        this.poseArm('right', _dirUpper, _dirLower, 0, e, dt);
         break;
       }
       case 'talk': {
-        const bob = Math.sin(t * 5) * 0.1 * e;
-        this.armPose('rightUpperArm', 0.25 + bob * 0.3, -0.55, 0.1, e);
-        this.armPose('rightLowerArm', 0.1, -0.7, 0.05, e);
+        const bob = Math.sin(t * 5) * 0.08 * e;
+        _dirUpper.set(0, 0, 0)
+          .addScaledVector(f, 0.12)
+          .addScaledVector(UP, -0.85)
+          .addScaledVector(r, 0.2)
+          .normalize();
+        _dirLower.set(0, 0, 0)
+          .addScaledVector(f, 0.85)
+          .addScaledVector(UP, -0.15 + bob)
+          .addScaledVector(r, 0.1)
+          .normalize();
+        this.poseArm('right', _dirUpper, _dirLower, 0, e, dt);
         break;
       }
       default:
@@ -440,38 +560,74 @@ export class TutorCharacter {
     if (t >= d) this.gesture = null;
   }
 
-  private targetAzimuth(target: THREE.Vector3 | null): number {
-    if (!target) return 0.35;
-    const shoulder = this.bone('rightUpperArm');
-    if (!shoulder) return 0.35;
-    shoulder.getWorldPosition(_v);
-    const dir = target.clone().sub(_v).setY(0).normalize();
-    return Math.atan2(dir.x, dir.z) - Math.atan2(this.forward.x, this.forward.z);
+  /**
+   * Pose an arm by aiming its segments along world-space directions.
+   * Rest-agnostic: works for T-pose and A-pose models alike.
+   */
+  private poseArm(
+    side: 'left' | 'right',
+    upperDir: THREE.Vector3,
+    lowerDir: THREE.Vector3 | null,
+    bend: number,
+    weight: number,
+    dt: number,
+  ): void {
+    const upperName = side + 'UpperArm';
+    const lowerName = side + 'LowerArm';
+    const upper = this.bone(upperName);
+    const lower = this.bone(lowerName);
+    const restUpper = upper && this.restWorld.get(upper);
+    const restLower = lower && this.restWorld.get(lower);
+    const restUpperDir = this.restArmDirs.get(upperName);
+    const restLowerDir = this.restArmDirs.get(lowerName);
+    if (!upper || !lower || !restUpper || !restLower || !restUpperDir || !restLowerDir) {
+      return;
+    }
+
+    const dir = upperDir.clone().normalize();
+    const desiredUpper = restUpper
+      .clone()
+      .multiply(fromToQuat(restUpperDir, dir, _qFromTo));
+    if (weight < 1) desiredUpper.slerp(restUpper, 1 - weight);
+
+    let ldir: THREE.Vector3;
+    if (lowerDir) {
+      ldir = lowerDir.clone().normalize();
+    } else {
+      // bend the elbow: forearm aims between the upper arm direction and up
+      ldir = dir.clone().lerp(UP, THREE.MathUtils.clamp(bend, 0, 1)).normalize();
+    }
+    const desiredLower = restLower
+      .clone()
+      .multiply(fromToQuat(restLowerDir, ldir, _qFromTo));
+    if (weight < 1) desiredLower.slerp(restLower, 1 - weight);
+
+    this.smoothTo(upper, desiredUpper, dt);
+    this.smoothTo(lower, desiredLower, dt);
   }
 
-  private armPose(boneName: string, yaw: number, pitch: number, roll: number, weight: number): void {
-    const bone = this.bone(boneName);
-    const rest = bone && this.restWorld.get(bone);
-    if (!bone || !rest) return;
-    if (weight < 0.01) return;
-    // world-space offsets applied in raise->aim->tilt order
-    const offset = _qY.setFromEuler(new THREE.Euler(0, yaw, 0))
-      .multiply(_qX.setFromEuler(new THREE.Euler(pitch, 0, 0)))
-      .multiply(_qZ.setFromEuler(new THREE.Euler(0, 0, roll)));
-    const desired = rest.clone().multiply(offset);
-    // blend toward rest when weight < 1
-    if (weight < 1) {
-      desired.slerp(rest, 1 - weight);
-    }
-    this.setBoneWorldRotation(bone, desired);
+  private smoothTo(bone: THREE.Bone, desired: THREE.Quaternion, dt: number): void {
+    bone.getWorldQuaternion(_tmpQuatSmooth);
+    _tmpQuatSmooth.slerp(desired, Math.min(1, dt * 9));
+    this.setBoneWorldRotation(bone, _tmpQuatSmooth);
   }
 
   private idleArms(dt: number): void {
     const t = performance.now() / 1000;
-    const swayL = Math.sin(t * 0.9) * 0.03;
-    const swayR = Math.sin(t * 0.9 + Math.PI) * 0.03;
-    this.armPose('leftLowerArm', 0, 0.06, swayL, 0.6);
-    this.armPose('rightLowerArm', 0, -0.06, swayR, 0.6);
+    const sway = Math.sin(t * 0.9) * 0.05;
+    // left arm hangs toward her left (-right)
+    _dirUpper.set(0, 0, 0)
+      .addScaledVector(this.forward, 0.09)
+      .addScaledVector(this.right, -(0.2 + sway))
+      .addScaledVector(UP, -1)
+      .normalize();
+    this.poseArm('left', _dirUpper, null, 0.04, 0.85, dt);
+    _dirUpper.set(0, 0, 0)
+      .addScaledVector(this.forward, 0.09)
+      .addScaledVector(this.right, 0.2 - sway)
+      .addScaledVector(UP, -1)
+      .normalize();
+    this.poseArm('right', _dirUpper, null, 0.04, 0.85, dt);
   }
 
   private updateExpressions(dt: number): void {
@@ -529,8 +685,8 @@ export class TutorCharacter {
   private setBoneWorldRotation(bone: THREE.Bone, worldQuat: THREE.Quaternion): void {
     const parent = bone.parent;
     if (parent) {
-      parent.getWorldQuaternion(_q);
-      bone.quaternion.copy(_q.invert().multiply(worldQuat));
+      parent.getWorldQuaternion(_qParent);
+      bone.quaternion.copy(_qParent.invert().multiply(worldQuat));
     } else {
       bone.quaternion.copy(worldQuat);
     }

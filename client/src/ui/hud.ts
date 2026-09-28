@@ -194,18 +194,19 @@ export class HUD {
 
   // ------------------------------------------------------------------ status
 
-  setStatus(state: 'idle' | 'thinking' | 'speaking' | 'error', label?: string): void {
+  setStatus(state: 'idle' | 'thinking' | 'speaking' | 'error' | 'connecting', label?: string): void {
     const pill = this.statusPill;
     const text = this.root.querySelector('#status-text')!;
     if (state === 'idle') {
       pill.classList.add('hidden');
-      pill.classList.remove('thinking', 'speaking', 'error');
+      pill.classList.remove('thinking', 'speaking', 'error', 'connecting');
       return;
     }
-    pill.classList.remove('hidden', 'thinking', 'speaking', 'error');
+    pill.classList.remove('hidden', 'thinking', 'speaking', 'error', 'connecting');
     pill.classList.add(state);
     text.textContent =
-      label ?? (state === 'thinking' ? 'Thinking…' : state === 'speaking' ? 'Speaking…' : 'Error');
+      label ??
+      (state === 'thinking' ? 'Thinking…' : state === 'speaking' ? 'Speaking…' : state === 'connecting' ? 'Connecting…' : 'Error');
   }
 
   appendSubtitle(text: string): void {

@@ -131,6 +131,21 @@ function handleAction(a: ServerEvent & { t: 'action' }): void {
 let turnActive = false;
 let dropAudio = false;
 
+client.onStatus = (connected) => {
+  if (!connected) {
+    turnActive = false;
+    dropAudio = true;
+    void audio.interrupt();
+    hud.setStatus('connecting');
+    hud.showNotice(
+      'Lost connection to the tutor server. Trying to reconnect… (is it running? scripts/dev.sh)',
+      8000,
+    );
+  } else {
+    hud.setStatus('idle');
+  }
+};
+
 client.on((event) => {
   switch (event.t) {
     case 'hello':
@@ -205,6 +220,10 @@ function greetOnce(): void {
 }
 
 hud.onSend = (text) => {
+  if (!client.connected) {
+    hud.showError('Not connected to the tutor server. Start it with scripts/dev.sh, then try again.');
+    return;
+  }
   turnActive = false;
   dropAudio = false;
   client.sendUserMessage(text);

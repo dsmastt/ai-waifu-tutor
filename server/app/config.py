@@ -2,21 +2,28 @@
 
 from __future__ import annotations
 
+import logging
 import os
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
 
+log = logging.getLogger("config")
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ENV_PATH = REPO_ROOT / ".env"
+ENV_EXAMPLE_PATH = REPO_ROOT / ".env.example"
 
 
 def _load_env() -> None:
-    if ENV_PATH.exists():
-        load_dotenv(ENV_PATH)
-    else:
-        load_dotenv()
+    # convenience: bootstrap a real .env from the template on first run so a
+    # key added to .env.example actually takes effect
+    if not ENV_PATH.exists() and ENV_EXAMPLE_PATH.exists():
+        shutil.copy(ENV_EXAMPLE_PATH, ENV_PATH)
+        log.info("No .env found - created it from .env.example")
+    load_dotenv(ENV_PATH)
 
 
 @dataclass

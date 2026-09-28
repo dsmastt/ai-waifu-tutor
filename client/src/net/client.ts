@@ -10,6 +10,10 @@ export class TutorClient {
   private reconnectDelay = 500;
   onStatus: ((connected: boolean) => void) | null = null;
 
+  get connected(): boolean {
+    return !!this.ws && this.ws.readyState === WebSocket.OPEN;
+  }
+
   connect(): void {
     if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
       return;

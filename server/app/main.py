@@ -37,6 +37,14 @@ tts = TTSEngine(settings)
 syllabus = get_syllabus_store(settings.data_dir / "syllabus.db")
 brain = TutorBrain(settings, provider, tts, memory, syllabus)
 
+log.info(
+    "LLM provider: %s (model=%s, base_url=%s)",
+    settings.provider,
+    settings.llm_model,
+    settings.llm_base_url,
+)
+log.info("TTS voice: %s (speed %.2f)", tts.voice, settings.tts_speed)
+
 
 @app.get("/health")
 async def health() -> dict:

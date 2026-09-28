@@ -316,6 +316,7 @@ body {
 #status-pill.thinking #status-dot { background: #facc15; animation: pulse 1s infinite; }
 #status-pill.speaking #status-dot { background: var(--accent); }
 #status-pill.error #status-dot { background: var(--danger); }
+#status-pill.connecting #status-dot { background: #8b93a7; animation: pulse 1s infinite; }
 
 @keyframes pulse {
   0%, 100% { opacity: 1; }
