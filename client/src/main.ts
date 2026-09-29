@@ -124,8 +124,8 @@ async function loadAnimations(): Promise<void> {
           name,
           result.clip,
           asBase,
-          result.hipsY
-            ? { times: result.hipsY.times, values: result.hipsY.values, bobScale: result.bobScale }
+          result.hipsPos
+            ? { times: result.hipsPos.times, values: result.hipsPos.values, bobScale: result.bobScale }
             : null,
         );
         console.info(

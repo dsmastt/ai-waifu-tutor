@@ -2,7 +2,7 @@ import * as THREE from 'three';
 
 export interface ClipHips {
   times: Float32Array;
-  values: Float32Array;
+  values: Float32Array; // frames * 3 (xyz)
   bobScale: number;
 }
 
@@ -178,36 +178,53 @@ export class ClipLibrary {
     }
   }
 
-  private bobAt(action: THREE.AnimationAction): number {
+  private rootAt(action: THREE.AnimationAction, out: THREE.Vector3): boolean {
     const hips = this.hipsByClip.get(action);
-    if (!hips) return 0;
-    const t = action.time % Math.max(hips.times[hips.times.length - 1], 0.001);
-    // linear search over sampled curve
-    let v0 = hips.values[0];
-    for (let i = 0; i < hips.times.length - 1; i++) {
+    if (!hips) return false;
+    const frames = hips.times.length;
+    const t = action.time % Math.max(hips.times[frames - 1], 0.001);
+    let i0 = 0;
+    for (let i = 0; i < frames - 1; i++) {
       if (t <= hips.times[i + 1]) {
-        const a = (t - hips.times[i]) / Math.max(hips.times[i + 1] - hips.times[i], 1e-6);
-        v0 = hips.values[i] * (1 - a) + hips.values[i + 1] * a;
+        i0 = i;
         break;
       }
-      v0 = hips.values[i + 1];
+      i0 = i + 1;
     }
-    // relative to the clip's neutral hip height, cm -> world meters
-    return (v0 - hips.values[0]) * 0.01 * hips.bobScale;
+    const t0 = hips.times[i0];
+    const t1 = hips.times[Math.min(i0 + 1, frames - 1)];
+    const a = t1 > t0 ? (t - t0) / (t1 - t0) : 0;
+    const s = hips.bobScale * 0.01; // cm -> world meters
+    out.set(
+      (hips.values[i0 * 3] * (1 - a) + hips.values[Math.min(i0 + 1, frames - 1) * 3] * a) * s,
+      (hips.values[i0 * 3 + 1] * (1 - a) + hips.values[Math.min(i0 + 1, frames - 1) * 3 + 1] * a) * s,
+      (hips.values[i0 * 3 + 2] * (1 - a) + hips.values[Math.min(i0 + 1, frames - 1) * 3 + 2] * a) * s,
+    );
+    // relative to the clip's neutral hip position
+    out.x -= hips.values[0] * s;
+    out.y -= hips.values[1] * s;
+    out.z -= hips.values[2] * s;
+    return true;
   }
 
-  /** Vertical bob (meters) blended across running actions, for grounding. */
-  update(dt: number): number {
+  /** Root motion (meters) blended across running actions, for grounding. */
+  update(dt: number, out: THREE.Vector3): void {
     this.mixer.update(dt);
-    let bob = 0;
+    out.set(0, 0, 0);
     let total = 0;
     for (const action of this.actions.values()) {
       if (!action.isRunning()) continue;
       const w = action.getEffectiveWeight();
       if (w <= 0.001) continue;
-      bob += this.bobAt(action) * w;
-      total += w;
+      if (this.rootAt(action, _hipsTmp)) {
+        out.x += _hipsTmp.x * w;
+        out.y += _hipsTmp.y * w;
+        out.z += _hipsTmp.z * w;
+        total += w;
+      }
     }
-    return total > 0 ? bob / total : 0;
+    if (total > 0) out.multiplyScalar(1 / total);
   }
 }
+
+const _hipsTmp = new THREE.Vector3();

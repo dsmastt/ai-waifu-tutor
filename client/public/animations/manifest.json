@@ -1,9 +1,7 @@
 {
   "$comment": "Mixamo animation mapping. Paths are relative to client/public/animations/. String values load one clip; arrays load variations that are picked at random (seamless variety). rootCorrection rotates the whole clip around Y in degrees if the character faces the wrong way.",
   "base": { "file": "animations_from_mixmo/Idle.fbx", "rootCorrection": 0 },
-  "idleAlts": [
-    { "file": "animations_from_mixmo/weight shift.fbx", "rootCorrection": 0 }
-  ],
+  "idleAlts": [],
   "talking": [
     { "file": "animations_from_mixmo/Talking.fbx", "rootCorrection": 0 },
     { "file": "animations_from_mixmo/Talking(1).fbx", "rootCorrection": 0 }

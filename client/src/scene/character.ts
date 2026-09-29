@@ -40,6 +40,7 @@ const _qTwist = new THREE.Quaternion();
 const _qLayered = new THREE.Quaternion();
 const _deltaDir = new THREE.Vector3();
 const _deltaDir2 = new THREE.Vector3();
+const _rootTmp = new THREE.Vector3();
 const _v = new THREE.Vector3();
 const _axis = new THREE.Vector3();
 const _tmpA = new THREE.Vector3();
@@ -316,9 +317,14 @@ export class TutorCharacter {
     const clipsActive =
       !!this.clips && (this.clips.hasBase || this.clips.oneShotActive);
 
-    let clipBob = 0;
+    let clipRootX = 0;
+    let clipRootY = 0;
+    let clipRootZ = 0;
     if (this.clips && clipsActive) {
-      clipBob = this.clips.update(dt);
+      this.clips.update(dt, _rootTmp);
+      clipRootX = _rootTmp.x;
+      clipRootY = _rootTmp.y;
+      clipRootZ = _rootTmp.z;
     }
     this.updateGaze(dt, time, camera);
     this.updateIdleLife(dt);
@@ -344,12 +350,15 @@ export class TutorCharacter {
       this.headOffset.pitch -= 0.04 * this.listenLean;
     }
 
-    // vertical grounding: procedural breathing bob, or the clip's hip bob
+    // vertical grounding: procedural breathing bob, or the clip's root motion
     // plus a self-calibrating bias that settles her lowest foot on the floor
-    // (retargeted clips inherit Mixamo's leg proportions, so feet hover)
     if (clipsActive) {
       this.updateGroundBias(dt);
-      this.group.position.y = clipBob + this.groundBias;
+      this.group.position.set(
+        clipRootX,
+        clipRootY + this.groundBias,
+        clipRootZ,
+      );
     } else {
       this.group.position.y = Math.sin(this.breathePhase * 1.1) * 0.006;
     }

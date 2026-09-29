@@ -45,9 +45,9 @@ export interface RetargetResult {
   clip: THREE.AnimationClip;
   mapped: number;
   total: number;
-  /** Hips vertical bob: times (s) + values (FBX units, cm). */
-  hipsY: { times: Float32Array; values: Float32Array } | null;
-  /** Convert hipsY values (cm) to world meters for the target character. */
+  /** Hips root motion: times (s) + xyz values (FBX units, cm). */
+  hipsPos: { times: Float32Array; values: Float32Array } | null;
+  /** Convert hipsPos values (cm) to world meters for the target character. */
   bobScale: number;
 }
 
@@ -99,20 +99,28 @@ export function retargetMixamoClip(
   }
   // include bones that only appear as parents (no own track)
   const seen = new Set<string>();
-  const visit = (name: string, parent: SrcBone | null): SrcBone | null => {
-    if (seen.has(name)) return null;
+  const visit = (name: string, parent: SrcBone | null): void => {
+    if (seen.has(name)) return;
     seen.add(name);
     const bone = byName.get(name);
-    if (!bone) return null;
-    const tgtName = BONE_MAP[name];
-    if (tgtName && !targetBones.has(tgtName)) return null;
-    const node: SrcBone = { name, bone, parent, tgtName, track: trackMap.get(name) ?? null };
+    if (!bone) return;
+    const mappedName = BONE_MAP[name];
+    const tgtName = mappedName && targetBones.has(mappedName) ? mappedName : null;
+    // pass-through nodes (unmapped bones like upperChest/shoulders) stay in
+    // the list so their rotations contribute to the world reconstruction,
+    // but are not mapped onto the target
+    const node: SrcBone = {
+      name,
+      bone,
+      parent,
+      tgtName,
+      track: trackMap.get(name) ?? null,
+    };
     srcList.push(node);
     for (const child of bone.children) {
       const cname = child.name.replace(/:/g, '');
       if (byName.has(cname) || trackMap.has(cname)) visit(cname, node);
     }
-    return node;
   };
   if (byName.has('mixamorigHips')) visit('mixamorigHips', null);
   if (srcList.length === 0) return null;
@@ -230,8 +238,9 @@ export function retargetMixamoClip(
     tracks.push(new THREE.QuaternionKeyframeTrack(`${tgt.name}.quaternion`, times.slice(), arr));
   }
 
-  // hips vertical bob (kept so feet plant correctly on the floor)
-  let hipsY: RetargetResult['hipsY'] = null;
+  // hips root motion (kept so feet plant correctly: the source hips carry
+  // the weight shifts side-to-side and the vertical bob)
+  let hipsPos: RetargetResult['hipsPos'] = null;
   const hipsSrc = srcList.find((s) => s.name === 'mixamorigHips');
   const hipsPosTrack = hipsSrc
     ? (srcClip.tracks.find(
@@ -240,12 +249,34 @@ export function retargetMixamoClip(
     : undefined;
   if (hipsPosTrack) {
     const interpolant = hipsPosTrack.createInterpolant();
-    const ys: number[] = [];
+    const raw = new Float32Array(frames * 3);
     for (let f = 0; f < frames; f++) {
       const buf = interpolant.evaluate(times[f]) as unknown as Float32Array;
-      ys.push(buf[1]); // Y is the up axis after FBX conversion
+      raw[f * 3] = buf[0];
+      raw[f * 3 + 1] = buf[1];
+      raw[f * 3 + 2] = buf[2];
     }
-    hipsY = { times: times.slice(), values: new Float32Array(ys) };
+    // Detrend X/Z with a moving average (~3s window): clips downloaded
+    // without Mixamo's "In Place" option carry a slow wander that would
+    // otherwise slide the feet across the floor. The fast weight shifts
+    // survive untouched. Y keeps full motion (vertical bob).
+    const win = Math.max(2, Math.round(FPS * 3));
+    const out = new Float32Array(frames * 3);
+    for (let f = 0; f < frames; f++) {
+      const from = Math.max(0, f - win);
+      const to = Math.min(frames, f + win);
+      const n = to - from;
+      let sx = 0;
+      let sz = 0;
+      for (let k = from; k < to; k++) {
+        sx += raw[k * 3];
+        sz += raw[k * 3 + 2];
+      }
+      out[f * 3] = raw[f * 3] - sx / n;
+      out[f * 3 + 1] = raw[f * 3 + 1];
+      out[f * 3 + 2] = raw[f * 3 + 2] - sz / n;
+    }
+    hipsPos = { times: times.slice(), values: out };
   }
 
   // scale: mixamo rigs are ~180 cm tall; the target is ~1.62 world units
@@ -263,7 +294,7 @@ export function retargetMixamoClip(
     clip: new THREE.AnimationClip(srcClip.name, duration, tracks),
     mapped: tracks.length,
     total: srcClip.tracks.length,
-    hipsY,
+    hipsPos,
     bobScale,
   };
 }
