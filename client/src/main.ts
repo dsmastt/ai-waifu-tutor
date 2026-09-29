@@ -423,9 +423,10 @@ world.onFrame(({ dt }) => {
   character.update(dt, performance.now() / 1000, world.camera);
   windows.update();
 
-  // audio -> status + lip sync
+  // audio -> status + lip sync + talking animation
   const speaking = audio.speaking;
   hud.setSpeaking(speaking);
+  character.setSpeaking(speaking);
   const vis = audio.tick();
   if (vis) character.setViseme(vis.v, vis.weight);
   else character.setViseme('', 0);

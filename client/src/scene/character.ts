@@ -315,6 +315,7 @@ export class TutorCharacter {
 
   /** Talking state: switch the ambient clip while she explains. */
   setSpeaking(speaking: boolean): void {
+    if (speaking === this.speaking) return;
     this.speaking = speaking;
     if (!this.clips) return;
     if (speaking && this.clips.has('talking')) {
@@ -435,6 +436,10 @@ export class TutorCharacter {
         .multiply(_qLayered.setFromEuler(new THREE.Euler(0, 0, breath)));
       this.smoothTo(chest, desired, dt, 7);
     }
+    // arm overlay only while idle: during speech the talking clip owns the
+    // arms, and a procedural bias + sway on top looked like two animations
+    // fighting (the clash)
+    if (this.speaking) return;
     for (const side of ['left', 'right'] as const) {
       const upper = this.bone(`${side}UpperArm`);
       if (!upper) continue;
