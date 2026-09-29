@@ -245,8 +245,39 @@ export function retargetMixamoClip(
   // AnimationMixer on the model root can bind them directly)
   const tracks: THREE.KeyframeTrack[] = [];
   for (const tgt of tgtList) {
-    const arr = samples.get(tgt.name);
+    let arr = samples.get(tgt.name);
     if (!arr) continue;
+
+    if (tgt.name === 'hips') {
+      // level the clip: remove the average body orientation so a clip whose
+      // source data leans (Mixamo takes differ) doesn't sit visibly tilted
+      // and snap between clips during transitions. Motion around the average
+      // (hip sway) is preserved.
+      const avg = new THREE.Quaternion();
+      let sign = 1;
+      const first = new THREE.Quaternion(arr[0], arr[1], arr[2], arr[3]);
+      for (let f = 0; f < frames; f++) {
+        const q = new THREE.Quaternion(arr[f * 4], arr[f * 4 + 1], arr[f * 4 + 2], arr[f * 4 + 3]);
+        if (q.dot(first) < 0) q.set(-q.x, -q.y, -q.z, -q.w);
+        avg.x += q.x;
+        avg.y += q.y;
+        avg.z += q.z;
+        avg.w += q.w;
+      }
+      avg.normalize();
+      const invAvg = avg.invert();
+      const leveled = new Float32Array(arr.length);
+      for (let f = 0; f < frames; f++) {
+        const q = new THREE.Quaternion(arr[f * 4], arr[f * 4 + 1], arr[f * 4 + 2], arr[f * 4 + 3]);
+        q.premultiply(invAvg);
+        leveled[f * 4] = q.x;
+        leveled[f * 4 + 1] = q.y;
+        leveled[f * 4 + 2] = q.z;
+        leveled[f * 4 + 3] = q.w;
+      }
+      arr = leveled;
+    }
+
     tracks.push(
       new THREE.QuaternionKeyframeTrack(`${tgt.bone.name}.quaternion`, times.slice(), arr),
     );

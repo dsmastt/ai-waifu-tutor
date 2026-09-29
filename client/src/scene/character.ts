@@ -555,7 +555,7 @@ export class TutorCharacter {
     this.desiredPitch = clampPitch;
     this.bodyYaw = THREE.MathUtils.clamp((desiredYaw - clampYaw) * 0.75, -0.95, 0.95);
 
-    const k = Math.min(1, dt * 7.5);
+    const k = Math.min(1, dt * 5.5);
     this.curYaw += (this.desiredYaw - this.curYaw) * k;
     this.curPitch += (this.desiredPitch - this.curPitch) * k;
     this.curBodyYaw += (this.bodyYaw - this.curBodyYaw) * Math.min(1, dt * 4);
@@ -964,17 +964,6 @@ export class TutorCharacter {
         const delta = fromToQuat(curF, aim, _qFromTo).clone();
         const desired = curW.clone().premultiply(delta).premultiply(offset);
         this.setBoneWorldRotation(head, desired);
-      }
-      if (neck) {
-        const curN = neck.getWorldQuaternion(new THREE.Quaternion());
-        const curNF = _deltaDir2.copy(this.headForwardLocal ?? this.forward).applyQuaternion(curN);
-        const deltaN = fromToQuat(curNF, aim, _qFromTo).clone();
-        const halfN = new THREE.Quaternion().slerpQuaternions(
-          new THREE.Quaternion(),
-          deltaN,
-          0.5,
-        );
-        this.setBoneWorldRotation(neck, curN.clone().premultiply(halfN));
       }
       return;
     }
