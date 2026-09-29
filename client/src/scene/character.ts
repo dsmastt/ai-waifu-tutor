@@ -43,6 +43,7 @@ const _deltaDir = new THREE.Vector3();
 const _deltaDir2 = new THREE.Vector3();
 const _rootTmp = new THREE.Vector3();
 const _zAxis = new THREE.Vector3(0, 0, 1);
+const DOWN = new THREE.Vector3(0, -1, 0);
 const _xAxis = new THREE.Vector3(1, 0, 0);
 const _v = new THREE.Vector3();
 const _axis = new THREE.Vector3();
@@ -672,7 +673,7 @@ export class TutorCharacter {
     g.t += dt;
     const t = g.t;
     const d = g.duration;
-    const inPhase = Math.min(1, t / 0.25);            // ease in
+    const inPhase = Math.min(1, t / (g.name === 'point' ? 0.5 : 0.25)); // ease in
     const outPhase = Math.max(0, Math.min(1, (d - t) / 0.3)); // ease out
     const env = Math.min(inPhase, outPhase);
     const e = env * env * (3 - 2 * env); // smoothstep
@@ -713,7 +714,24 @@ export class TutorCharacter {
         } else {
           _dirUpper.set(0.4, -0.5, 1).normalize();
         }
-        this.poseArm(side, _dirUpper, null, 0.02, e, dt);
+        // relaxed casual point: the upper arm only partly raises (elbow stays
+        // low, no straight out-and-up "salute"), the forearm does the aiming
+        _dirLower.copy(_dirUpper);
+        _dirUpper.lerp(DOWN, 0.35).normalize();
+        this.poseArm(side, _dirUpper, _dirLower, 0, e, dt);
+        // small head tilt + torso turn toward the target
+        const lateral = -_dirLower.dot(r); // + = target on her left
+        this.headOffset.roll += THREE.MathUtils.clamp(lateral * 0.1, -0.12, 0.12);
+        const chest = this.bone('chest');
+        if (chest) {
+          chest.getWorldQuaternion(_q);
+          const desired = _q
+            .clone()
+            .premultiply(
+              _qOutward.setFromAxisAngle(UP, THREE.MathUtils.clamp(-lateral * 0.22, -0.22, 0.22) * e),
+            );
+          this.setBoneWorldRotation(chest, desired);
+        }
         break;
       }
       case 'wave': {

@@ -165,8 +165,8 @@ export function retargetMixamoClip(
   const rootCorrection = _q.setFromAxisAngle(_axis.set(0, 1, 0), THREE.MathUtils.degToRad(rootCorrectionDeg));
 
   // --- resample ---
-  const duration = Math.max(srcClip.duration, 0.1);
-  const frames = Math.max(2, Math.ceil(duration * FPS));
+  let duration = Math.max(srcClip.duration, 0.1);
+  let frames = Math.max(2, Math.ceil(duration * FPS));
   const times = new Float32Array(frames);
   for (let f = 0; f < frames; f++) times[f] = (duration * f) / (frames - 1);
 
@@ -325,32 +325,6 @@ export function retargetMixamoClip(
     }
   }
 
-  // build tracks (named after the target bones' actual node names so an
-  // AnimationMixer on the model root can bind them directly)
-  const tracks: THREE.KeyframeTrack[] = [];
-  for (const tgt of tgtList) {
-    let arr = samples.get(tgt.name);
-    if (!arr) continue;
-
-    const part = partCache.get(tgt.name);
-    if (part) {
-      const leveled = new Float32Array(arr.length);
-      for (let f = 0; f < frames; f++) {
-        const q = new THREE.Quaternion(arr[f * 4], arr[f * 4 + 1], arr[f * 4 + 2], arr[f * 4 + 3]);
-        q.premultiply(part);
-        leveled[f * 4] = q.x;
-        leveled[f * 4 + 1] = q.y;
-        leveled[f * 4 + 2] = q.z;
-        leveled[f * 4 + 3] = q.w;
-      }
-      arr = leveled;
-    }
-
-    tracks.push(
-      new THREE.QuaternionKeyframeTrack(`${tgt.bone.name}.quaternion`, times.slice(), arr),
-    );
-  }
-
   // hips root motion (kept so feet plant correctly: the source hips carry
   // the weight shifts side-to-side and the vertical bob)
   let hipsPos: RetargetResult['hipsPos'] = null;
@@ -390,6 +364,77 @@ export function retargetMixamoClip(
       out[f * 3 + 2] = raw[f * 3 + 2] - sz / n;
     }
     hipsPos = { times: times.slice(), values: out };
+  }
+
+  // trim neutral bookends: Mixamo action clips typically start and end at
+  // the bind (T-pose). A one-shot clamping its last frame would flash that
+  // pose, and durations include dead time. Slice to the active range.
+  {
+    const devs = new Float32Array(frames);
+    for (const tgt of tgtList) {
+      const arr = samples.get(tgt.name);
+      if (!arr) continue;
+      const bind = tgtBind.get(tgt)!;
+      for (let f = 0; f < frames; f++) {
+        _q.set(arr[f * 4], arr[f * 4 + 1], arr[f * 4 + 2], arr[f * 4 + 3]);
+        const dev = 1 - Math.abs(_q.dot(bind));
+        if (dev > devs[f]) devs[f] = dev;
+      }
+    }
+    let f0 = 0;
+    while (f0 < frames - 1 && devs[f0] < 0.002) f0++;
+    let f1 = frames - 1;
+    while (f1 > f0 && devs[f1] < 0.002) f1--;
+    const pad = Math.round(FPS * 0.2);
+    f0 = Math.max(0, f0 - pad);
+    f1 = Math.min(frames - 1, f1 + pad);
+    if (f0 > 0 || f1 < frames - 1) {
+      const newFrames = f1 - f0 + 1;
+      if (newFrames >= Math.round(FPS * 0.5)) {
+        const newTimes = new Float32Array(newFrames);
+        const t0 = times[f0];
+        for (let f = 0; f < newFrames; f++) newTimes[f] = times[f0 + f] - t0;
+        for (const [name, arr] of samples) {
+          const sliced = new Float32Array(newFrames * 4);
+          sliced.set(arr.subarray(f0 * 4, (f1 + 1) * 4));
+          samples.set(name, sliced);
+        }
+        if (hipsPos) {
+          const sliced = new Float32Array(newFrames * 3);
+          sliced.set(hipsPos.values.subarray(f0 * 3, (f1 + 1) * 3));
+          hipsPos = { times: newTimes, values: sliced };
+        }
+        for (let f = 0; f < newFrames; f++) times[f] = newTimes[f];
+        frames = newFrames;
+        duration = Math.max(0.1, times[newFrames - 1]);
+      }
+    }
+  }
+
+  // build tracks (named after the target bones' actual node names so an
+  // AnimationMixer on the model root can bind them directly)
+  const tracks: THREE.KeyframeTrack[] = [];
+  for (const tgt of tgtList) {
+    let arr = samples.get(tgt.name);
+    if (!arr) continue;
+
+    const part = partCache.get(tgt.name);
+    if (part) {
+      const leveled = new Float32Array(arr.length);
+      for (let f = 0; f < frames; f++) {
+        const q = new THREE.Quaternion(arr[f * 4], arr[f * 4 + 1], arr[f * 4 + 2], arr[f * 4 + 3]);
+        q.premultiply(part);
+        leveled[f * 4] = q.x;
+        leveled[f * 4 + 1] = q.y;
+        leveled[f * 4 + 2] = q.z;
+        leveled[f * 4 + 3] = q.w;
+      }
+      arr = leveled;
+    }
+
+    tracks.push(
+      new THREE.QuaternionKeyframeTrack(`${tgt.bone.name}.quaternion`, times.slice(), arr),
+    );
   }
 
   // scale: mixamo rigs are ~180 cm tall; the target is ~1.62 world units
