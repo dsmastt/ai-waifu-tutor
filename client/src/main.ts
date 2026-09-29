@@ -152,7 +152,21 @@ async function loadAnimations(): Promise<void> {
       }
     };
 
-    await loadSlot('base', manifest.base, true);
+    // the base slot is a priority list: first successful clip wins
+    const loadFirst = async (
+      name: string,
+      slot: ManifestSlot | undefined,
+      asBase: boolean,
+    ): Promise<boolean> => {
+      if (!slot) return false;
+      const list = Array.isArray(slot) ? slot : [slot];
+      for (const entry of list) {
+        if (await loadOne(name, entry, asBase)) return true;
+      }
+      return false;
+    };
+
+    await loadFirst('base', manifest.base, true);
     for (const alt of manifest.idleAlts ?? []) {
       await loadOne('idleAlt', alt, false);
     }

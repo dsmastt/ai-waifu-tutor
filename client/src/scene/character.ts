@@ -399,10 +399,11 @@ export class TutorCharacter {
   private updateGroundBias(dt: number): void {
     const vrm = this.vrm;
     if (!vrm) return;
-    // measure foot height WITHOUT the group offset (it still reflects the
-    // previous frame's offset, which is close enough)
+    // measure the lowest point of both feet+toes WITHOUT the group offset
+    // (the bones' world matrices still reflect the previous frame's offset,
+    // which is close enough)
     let minFoot = Infinity;
-    for (const name of ['leftFoot', 'rightFoot'] as const) {
+    for (const name of ['leftFoot', 'rightFoot', 'leftToes', 'rightToes'] as const) {
       const b = vrm.humanoid!.getRawBoneNode(name as never);
       if (b) minFoot = Math.min(minFoot, b.getWorldPosition(_deltaDir).y);
     }
@@ -411,7 +412,7 @@ export class TutorCharacter {
     this.footSamples.push(localFoot);
     if (this.footSamples.length > 60) this.footSamples.shift();
     const lowest = Math.min(...this.footSamples);
-    const target = THREE.MathUtils.clamp(0.008 - lowest, -0.25, 0.25);
+    const target = THREE.MathUtils.clamp(0.012 - lowest, -0.25, 0.25);
     this.groundBias += (target - this.groundBias) * Math.min(1, dt * 8);
   }
 

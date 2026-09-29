@@ -190,7 +190,9 @@ export function retargetMixamoClip(
       const local = at(s.track, t, _q);
       srcLocal.set(s, local.clone());
       if (s.parent) {
-        srcWorld.set(s, _q2.copy(srcWorld.get(s.parent)!).multiply(local));
+        // NOTE: clone - the temp quaternions are reused, storing them
+        // directly would alias every map entry to one object
+        srcWorld.set(s, _q2.copy(srcWorld.get(s.parent)!).multiply(local).clone());
       } else {
         srcWorld.set(s, local.clone());
       }
@@ -199,7 +201,14 @@ export function retargetMixamoClip(
     for (const tgt of tgtList) {
       // find the corresponding source node
       const src = srcList.find((s) => s.tgtName === tgt.name)!;
-      const worldT = _q.copy(tgtBind.get(tgt)!).multiply(_q2.copy(srcBind.get(src)!).invert()).multiply(srcWorld.get(src)!);
+      // world-space delta convention: the source's world rotation delta from
+      // its bind is applied to the target's bind orientation:
+      //   world_t = (world_s * inv(W_s)) * W_t
+      // (the conjugated variant W_t * inv(W_s) * world_s assumes matching
+      // bone frames; Mixamo and VRoid limb frames differ wildly in bind, so
+      // conjugation sends arms swinging around the wrong axes)
+      const delta = _q.copy(srcWorld.get(src)!).multiply(_q2.copy(srcBind.get(src)!).invert());
+      const worldT = delta.multiply(tgtBind.get(tgt)!);
       let local: THREE.Quaternion;
       if (tgt.parent) {
         local = _q2.copy(tgtWorld.get(tgt.parent)!).invert().multiply(worldT);
