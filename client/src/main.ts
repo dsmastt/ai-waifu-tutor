@@ -122,6 +122,10 @@ async function loadAnimations(): Promise<void> {
           console.warn(`[anim] no retargetable tracks in ${entry.file}`);
           return false;
         }
+        (window as unknown as { __animDebug?: unknown[] }).__animDebug = [
+          ...(((window as unknown as { __animDebug?: unknown[] }).__animDebug) ?? []),
+          { name, file: entry.file, debug: result.debug },
+        ];
         character.clips!.register(
           name,
           result.clip,

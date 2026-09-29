@@ -119,6 +119,8 @@ export class TutorCharacter {
   private listening = false;
   private listenLean = 0;
   private groundBias = 0;
+  private leanFixPitch = 0;
+  private leanFixRoll = 0;
 
   // breath
   private breathePhase = 0;
@@ -356,6 +358,11 @@ export class TutorCharacter {
       clipRootY = _rootTmp.y;
       clipRootZ = _rootTmp.z;
     }
+    // refresh world matrices after the mixer wrote the clip pose: all the
+    // world-space pose math below reads these, and stale (render-time)
+    // matrices made corrections fight their own previous state (shivering)
+    this.vrm.scene.updateMatrixWorld(true);
+    if (clipsActive) this.updateLeanLeveler(dt);
     this.updateGaze(dt, time, camera);
     this.updateIdleLife(dt);
     this.updateBlink(dt, time);
@@ -431,6 +438,30 @@ export class TutorCharacter {
         .multiply(wobble);
       this.smoothTo(upper, desired, dt, 7);
     }
+  }
+
+  /**
+   * Runtime lean leveler: measures the OBSERVED head-vs-hips lean and slowly
+   * tilts the hips to cancel it. Unlike offline per-clip corrections this
+   * closes the loop on what is actually rendered, self-calibrating per clip,
+   * and its slow rate keeps transitions smooth.
+   */
+  private updateLeanLeveler(dt: number): void {
+    const head = this.bone('head');
+    const hips = this.bone('hips');
+    if (!head || !hips) return;
+    const hp = head.getWorldPosition(_deltaDir);
+    const ip = hips.getWorldPosition(_deltaDir2);
+    const height = Math.max(0.3, hp.y - ip.y);
+    const targetPitch = THREE.MathUtils.clamp(-(hp.z - ip.z) / height, -0.3, 0.3);
+    const targetRoll = THREE.MathUtils.clamp((hp.x - ip.x) / height, -0.3, 0.3);
+    this.leanFixPitch += (targetPitch - this.leanFixPitch) * Math.min(1, dt * 0.7);
+    this.leanFixRoll += (targetRoll - this.leanFixRoll) * Math.min(1, dt * 0.7);
+    const fix = _qOutward.setFromEuler(
+      new THREE.Euler(this.leanFixPitch, 0, this.leanFixRoll, 'XYZ'),
+    );
+    const hipsW = hips.getWorldQuaternion(new THREE.Quaternion()).premultiply(fix);
+    this.setBoneWorldRotation(hips, hipsW);
   }
 
   private updateGroundBias(dt: number): void {

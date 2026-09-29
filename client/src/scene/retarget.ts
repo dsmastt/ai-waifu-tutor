@@ -41,6 +41,8 @@ export const BONE_MAP: Record<string, string> = {
   mixamorigRightToeBase: 'rightToes',
 };
 
+let result_debug: { avgLeanZ: number; pitchDeg: number } = { avgLeanZ: 0, pitchDeg: 0 };
+
 export interface RetargetResult {
   clip: THREE.AnimationClip;
   mapped: number;
@@ -49,6 +51,7 @@ export interface RetargetResult {
   hipsPos: { times: Float32Array; values: Float32Array } | null;
   /** Convert hipsPos values (cm) to world meters for the target character. */
   bobScale: number;
+  debug: { avgLeanZ: number; pitchDeg: number };
 }
 
 interface SrcBone {
@@ -171,6 +174,19 @@ export function retargetMixamoClip(
   const srcWorld = new Map<SrcBone, THREE.Quaternion>();
   const srcLocal = new Map<SrcBone, THREE.Quaternion>();
   const tgtWorld = new Map<TgtBone, THREE.Quaternion>();
+  // accumulate the chest's average world orientation (relative to its bind)
+  // so the whole clip can be leveled by the VISIBLE posture, not the root
+  const chestTgt = tgtList.find((t) => t.name === 'chest') ?? tgtList.find((t) => t.name === 'spine');
+  const chestBind = chestTgt ? tgtBind.get(chestTgt) ?? null : null;
+  const avgChestDelta = new THREE.Quaternion();
+  let avgSign: number | null = null;
+  // visible lean: average head-vs-hips offset in target space (meters)
+  const headTgt = tgtList.find((t) => t.name === 'head');
+  const chainNames = ['hips', 'spine', 'chest', 'neck', 'head'];
+  let leanSumX = 0;
+  let leanSumZ = 0;
+  let heightSum = 0;
+  let leanFrames = 0;
 
   const interpolants = new Map<string, THREE.Interpolant>();
   const at = (track: THREE.QuaternionKeyframeTrack | null, t: number, out: THREE.Quaternion): THREE.Quaternion => {
@@ -219,6 +235,15 @@ export function retargetMixamoClip(
         if (tgt.name === 'hips') local.premultiply(rootCorrection);
       }
       tgtWorld.set(tgt, worldT.clone());
+      if (tgt === chestTgt && chestBind) {
+        const delta = _q2.copy(worldT).multiply(_q.copy(chestBind).invert()).clone();
+        if (avgSign === null) avgSign = delta.w >= 0 ? 1 : -1;
+        const s = delta.w >= 0 ? 1 : -1;
+        avgChestDelta.x += delta.x * s;
+        avgChestDelta.y += delta.y * s;
+        avgChestDelta.z += delta.z * s;
+        avgChestDelta.w += delta.w * s;
+      }
       let arr = samples.get(tgt.name);
       if (!arr) {
         arr = new Float32Array(frames * 4);
@@ -228,6 +253,30 @@ export function retargetMixamoClip(
       arr[f * 4 + 1] = local.y;
       arr[f * 4 + 2] = local.z;
       arr[f * 4 + 3] = local.w;
+    }
+
+    // visible lean accumulation (target-space, after the chain is solved):
+    // the head's world offset from the hips, summing each chain bone's
+    // rotated local offset
+    if (headTgt) {
+      let px = 0;
+      let py = 0;
+      let pz = 0;
+      for (let ci = 0; ci < chainNames.length - 1; ci++) {
+        const t = tgtList.find((tt) => tt.name === chainNames[ci]);
+        const nxt = tgtList.find((tt) => tt.name === chainNames[ci + 1]);
+        if (!t || !nxt) continue;
+        const wq = tgtWorld.get(t);
+        if (!wq) continue;
+        const off = _v.copy(nxt.bone.position).applyQuaternion(wq);
+        px += off.x;
+        py += off.y;
+        pz += off.z;
+      }
+      leanSumX += px;
+      leanSumZ += pz;
+      heightSum += py;
+      leanFrames++;
     }
 
     if (f === 0) {
@@ -241,6 +290,41 @@ export function retargetMixamoClip(
     }
   }
 
+  // final leveling correction: rotate the whole clip so the average visible
+  // posture (chest) returns to upright, removing constant leans while
+  // preserving motion around the average. The correction is distributed
+  // through the spine chain (not dumped on the pelvis) so the stance stays
+  // natural.
+  let levelCorrection: THREE.Quaternion | null = null;
+  if (avgSign !== null && avgChestDelta.lengthSq() > 1e-8) {
+    avgChestDelta.normalize();
+    levelCorrection = avgChestDelta.clone().invert();
+  }
+  // correct the measured visible lean: rotate around X/Z so the average
+  // head offset from the hips matches the model's natural bind posture
+  let debugPitch = 0;
+  let debugAvgZ = 0;
+  if (levelCorrection && leanFrames > 0) {
+    const avgX = leanSumX / leanFrames;
+    const avgZ = leanSumZ / leanFrames;
+    const height = Math.max(0.3, heightSum / leanFrames);
+    debugAvgZ = avgZ;
+    const pitch = -Math.asin(THREE.MathUtils.clamp(avgZ / height, -0.6, 0.6));
+    const roll = Math.asin(THREE.MathUtils.clamp(avgX / height, -0.6, 0.6));
+    debugPitch = pitch;
+    const fix = _q.setFromEuler(new THREE.Euler(pitch, 0, roll, 'XYZ'));
+    levelCorrection = fix.clone().multiply(levelCorrection);
+  }
+  result_debug = { avgLeanZ: debugAvgZ, pitchDeg: (debugPitch * 180) / Math.PI };
+  const identity = new THREE.Quaternion();
+  const levelParts: Record<string, number> = { hips: 0.45, spine: 0.3, chest: 0.25 };
+  const partCache = new Map<string, THREE.Quaternion>();
+  if (levelCorrection) {
+    for (const [bone, frac] of Object.entries(levelParts)) {
+      partCache.set(bone, new THREE.Quaternion().slerpQuaternions(identity, levelCorrection, frac));
+    }
+  }
+
   // build tracks (named after the target bones' actual node names so an
   // AnimationMixer on the model root can bind them directly)
   const tracks: THREE.KeyframeTrack[] = [];
@@ -248,28 +332,12 @@ export function retargetMixamoClip(
     let arr = samples.get(tgt.name);
     if (!arr) continue;
 
-    if (tgt.name === 'hips') {
-      // level the clip: remove the average body orientation so a clip whose
-      // source data leans (Mixamo takes differ) doesn't sit visibly tilted
-      // and snap between clips during transitions. Motion around the average
-      // (hip sway) is preserved.
-      const avg = new THREE.Quaternion();
-      let sign = 1;
-      const first = new THREE.Quaternion(arr[0], arr[1], arr[2], arr[3]);
-      for (let f = 0; f < frames; f++) {
-        const q = new THREE.Quaternion(arr[f * 4], arr[f * 4 + 1], arr[f * 4 + 2], arr[f * 4 + 3]);
-        if (q.dot(first) < 0) q.set(-q.x, -q.y, -q.z, -q.w);
-        avg.x += q.x;
-        avg.y += q.y;
-        avg.z += q.z;
-        avg.w += q.w;
-      }
-      avg.normalize();
-      const invAvg = avg.invert();
+    const part = partCache.get(tgt.name);
+    if (part) {
       const leveled = new Float32Array(arr.length);
       for (let f = 0; f < frames; f++) {
         const q = new THREE.Quaternion(arr[f * 4], arr[f * 4 + 1], arr[f * 4 + 2], arr[f * 4 + 3]);
-        q.premultiply(invAvg);
+        q.premultiply(part);
         leveled[f * 4] = q.x;
         leveled[f * 4 + 1] = q.y;
         leveled[f * 4 + 2] = q.z;
@@ -341,5 +409,6 @@ export function retargetMixamoClip(
     total: srcClip.tracks.length,
     hipsPos,
     bobScale,
+    debug: result_debug,
   };
 }
