@@ -138,9 +138,11 @@ export class ClipLibrary {
     action.reset();
     action.setLoop(THREE.LoopOnce, 1);
     action.clampWhenFinished = true;
-    action.setEffectiveWeight(1);
+    // start at weight 0 - the update loop fades it in smoothly; starting at
+    // full weight pops the pose in a single frame
+    action.setEffectiveWeight(0);
     action.play();
-    this.weights.set(action, 1);
+    this.weights.set(action, 0);
     this.oneShot = action;
     return true;
   }
@@ -189,7 +191,7 @@ export class ClipLibrary {
     this.mixer.update(dt);
 
     const gesture = this.oneShotActive ? this.oneShot : null;
-    const k = Math.min(1, dt * 6);
+    const k = Math.min(1, dt * 4.5);
     for (const [action, weight] of this.weights) {
       let target = 0;
       if (action === gesture) target = 1;

@@ -118,7 +118,6 @@ export class TutorCharacter {
   private lookAroundTimer = 4;
   private listening = false;
   private listenLean = 0;
-  private footSamples: number[] = [];
   private groundBias = 0;
 
   // breath
@@ -438,8 +437,6 @@ export class TutorCharacter {
     const vrm = this.vrm;
     if (!vrm) return;
     // measure the lowest point of both feet+toes WITHOUT the group offset
-    // (the bones' world matrices still reflect the previous frame's offset,
-    // which is close enough)
     let minFoot = Infinity;
     for (const name of ['leftFoot', 'rightFoot', 'leftToes', 'rightToes'] as const) {
       const b = vrm.humanoid!.getRawBoneNode(name as never);
@@ -447,11 +444,10 @@ export class TutorCharacter {
     }
     if (!Number.isFinite(minFoot)) return;
     const localFoot = minFoot - this.group.position.y;
-    this.footSamples.push(localFoot);
-    if (this.footSamples.length > 60) this.footSamples.shift();
-    const lowest = Math.min(...this.footSamples);
-    const target = THREE.MathUtils.clamp(0.012 - lowest, -0.25, 0.25);
-    this.groundBias += (target - this.groundBias) * Math.min(1, dt * 8);
+    // slow continuous tracking (no sliding-window minimum): a window min
+    // jumps whenever an extreme sample drops out, jolting the whole body
+    const instant = THREE.MathUtils.clamp(0.012 - localFoot, -0.25, 0.25);
+    this.groundBias += (instant - this.groundBias) * Math.min(1, dt * 1.2);
   }
 
   private updateClipGestures(dt: number): void {
