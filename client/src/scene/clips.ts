@@ -1,28 +1,33 @@
 import * as THREE from 'three';
 
+/**
+ * Animation clip playback on the model's raw skeleton.
+ *
+ * Weight model (explicit, deterministic): a single ambient "base" action and
+ * an optional one-shot gesture. Weights are driven every frame instead of
+ * three.js's fadeIn/fadeOut (which fights itself when the ambient changes
+ * mid-gesture):
+ *
+ *   one-shot active: base -> 0, one-shot -> 1
+ *   otherwise:       base -> 1, everything else -> 0
+ *
+ * Multiple variations of a role are registered under `name`, `name~1`, ...
+ * and picked at random for natural variety.
+ */
 export interface ClipHips {
   times: Float32Array;
   values: Float32Array; // frames * 3 (xyz)
   bobScale: number;
 }
 
-/**
- * Animation clip playback on the VRM normalized skeleton.
- *
- * A base (ambient) action loops permanently; one-shot gestures fade the base
- * out and back in. Multiple variations of a role are registered under
- * `name`, `name~1`, `name~2`, ... and picked at random for natural variety.
- * The AnimationMixer runs on the VRM's normalized bone root and three-vrm
- * copies the pose to the raw skeleton each update.
- */
 export class ClipLibrary {
   readonly mixer: THREE.AnimationMixer;
   private actions = new Map<string, THREE.AnimationAction>();
-  private variants = new Map<string, string[]>(); // base name -> all registered names
+  private variants = new Map<string, string[]>(); // role -> registered names
   private hipsByClip = new Map<THREE.AnimationAction, ClipHips>();
+  private weights = new Map<THREE.AnimationAction, number>();
   private base: THREE.AnimationAction | null = null;
   private oneShot: THREE.AnimationAction | null = null;
-  private restoreBase = false;
   private traceEntries: string[] = [];
 
   private trace(msg: string): void {
@@ -34,29 +39,15 @@ export class ClipLibrary {
     return [...this.traceEntries];
   }
 
-  constructor(normalizedRoot: THREE.Object3D) {
-    this.mixer = new THREE.AnimationMixer(normalizedRoot);
+  constructor(root: THREE.Object3D) {
+    this.mixer = new THREE.AnimationMixer(root);
     this.mixer.addEventListener('finished', (e) => {
       const action = (e as unknown as { action: THREE.AnimationAction }).action;
       this.trace(`finished ${action.getClip().name}`);
-      if (this.oneShot && action === this.oneShot) {
+      if (this.oneShot === action) {
         this.oneShot = null;
-        if (this.restoreBase && this.base) {
-          this.trace(`restore base ${this.base.getClip().name}`);
-          this.revive(this.base, 0.3);
-          this.restoreBase = false;
-        }
       }
     });
-  }
-
-  /** three.js disables an action when it fades to zero; play() alone does
-   * not re-enable it, so restore `enabled` explicitly. */
-  private revive(action: THREE.AnimationAction, fadeIn = 0.3): void {
-    action.enabled = true;
-    action.paused = false;
-    action.play();
-    action.fadeIn(fadeIn);
   }
 
   get loaded(): boolean {
@@ -84,22 +75,19 @@ export class ClipLibrary {
     return [...this.actions.keys()];
   }
 
-  /** Debug: registered roles with their variation counts and durations. */
+  /** All registered names for a role (variations included). */
+  variantNames(name: string): string[] {
+    return this.variants.get(name) ?? [];
+  }
+
+  /** Debug: registered roles with variation counts and max duration. */
   describe(): Record<string, { variants: number; duration: number }> {
     const out: Record<string, { variants: number; duration: number }> = {};
     for (const [role, names] of this.variants) {
       const durations = names.map((n) => this.actions.get(n)!.getClip().duration);
-      out[role] = {
-        variants: names.length,
-        duration: Math.max(...durations),
-      };
+      out[role] = { variants: names.length, duration: Math.max(...durations) };
     }
     return out;
-  }
-
-  /** All registered names for a role (variations included). */
-  variantNames(name: string): string[] {
-    return this.variants.get(name) ?? [];
   }
 
   register(name: string, clip: THREE.AnimationClip, asBase = false, hips?: ClipHips | null): void {
@@ -109,12 +97,13 @@ export class ClipLibrary {
     this.variants.set(name, variants);
 
     const action = this.mixer.clipAction(clip);
-    action.setLoop(THREE.LoopRepeat, Infinity);
     this.actions.set(registeredName, action);
+    this.weights.set(action, 0);
     if (hips) this.hipsByClip.set(action, hips);
     if (asBase) {
       this.base = action;
       action.play();
+      this.weights.set(action, 1);
       action.setEffectiveWeight(1);
     }
   }
@@ -126,56 +115,43 @@ export class ClipLibrary {
     return this.actions.get(pick) ?? null;
   }
 
-  /** Cross-fade the ambient loop to a (random variation of a) clip. */
+  /** Switch the ambient loop (random variation of a role). */
   crossFade(name: string, duration = 0.4): void {
     const next = this.pick(name);
     if (!next || next === this.base) return;
-    this.trace(`crossFade -> ${name} (from ${this.base?.getClip().name})`);
-    // three.js deactivates an action whose weight fades to zero, and fadeIn
-    // does not restart it: always play() explicitly
-    next.reset();
-    if (!next.isRunning()) next.play();
-    if (this.base && this.base !== next) {
-      this.base.crossFadeTo(next, duration, false);
-    } else {
-      next.fadeIn(duration);
+    this.trace(`ambient -> ${name}`);
+    if (!next.isRunning()) {
+      next.reset().setLoop(THREE.LoopRepeat, Infinity);
+      next.play();
     }
     this.base = next;
   }
 
-  /** Play a (random variation of a) gesture once, fading the ambient out/in. */
+  /** Play a (random variation of a) gesture once; the base fades out/in. */
   playOneShot(name: string, duration = 0.25): boolean {
     const action = this.pick(name);
     if (!action || action === this.base) return false;
-    this.trace(`oneShot ${name} (base ${this.base?.getClip().name})`);
-
-    if (this.oneShot && this.oneShot.isRunning()) {
-      this.trace(`stop previous oneShot ${this.oneShot.getClip().name}`);
+    this.trace(`oneShot ${name}`);
+    if (this.oneShot && this.oneShot !== action && this.oneShot.isRunning()) {
       this.oneShot.stop();
     }
-    action.reset().setLoop(THREE.LoopOnce, 1);
+    action.reset();
+    action.setLoop(THREE.LoopOnce, 1);
     action.clampWhenFinished = true;
     action.setEffectiveWeight(1);
     action.play();
+    this.weights.set(action, 1);
     this.oneShot = action;
-    if (this.base && this.base.isRunning()) {
-      this.base.fadeOut(duration);
-      this.restoreBase = true;
-    } else {
-      this.restoreBase = false;
-    }
     return true;
   }
 
+  /** Stop the current gesture immediately (interrupt). */
   stopOneShot(): void {
     if (this.oneShot && this.oneShot.isRunning()) {
       this.oneShot.stop();
-      this.oneShot = null;
+      this.weights.set(this.oneShot, 0);
     }
-    if (this.restoreBase && this.base) {
-      this.revive(this.base, 0.3);
-      this.restoreBase = false;
-    }
+    this.oneShot = null;
   }
 
   private rootAt(action: THREE.AnimationAction, out: THREE.Vector3): boolean {
@@ -195,10 +171,11 @@ export class ClipLibrary {
     const t1 = hips.times[Math.min(i0 + 1, frames - 1)];
     const a = t1 > t0 ? (t - t0) / (t1 - t0) : 0;
     const s = hips.bobScale * 0.01; // cm -> world meters
+    const i1 = Math.min(i0 + 1, frames - 1);
     out.set(
-      (hips.values[i0 * 3] * (1 - a) + hips.values[Math.min(i0 + 1, frames - 1) * 3] * a) * s,
-      (hips.values[i0 * 3 + 1] * (1 - a) + hips.values[Math.min(i0 + 1, frames - 1) * 3 + 1] * a) * s,
-      (hips.values[i0 * 3 + 2] * (1 - a) + hips.values[Math.min(i0 + 1, frames - 1) * 3 + 2] * a) * s,
+      (hips.values[i0 * 3] * (1 - a) + hips.values[i1 * 3] * a) * s,
+      (hips.values[i0 * 3 + 1] * (1 - a) + hips.values[i1 * 3 + 1] * a) * s,
+      (hips.values[i0 * 3 + 2] * (1 - a) + hips.values[i1 * 3 + 2] * a) * s,
     );
     // relative to the clip's neutral hip position
     out.x -= hips.values[0] * s;
@@ -207,15 +184,29 @@ export class ClipLibrary {
     return true;
   }
 
-  /** Root motion (meters) blended across running actions, for grounding. */
+  /** Advance the mixer, drive weights, and blend root motion (meters). */
   update(dt: number, out: THREE.Vector3): void {
     this.mixer.update(dt);
+
+    const gesture = this.oneShotActive ? this.oneShot : null;
+    const k = Math.min(1, dt * 6);
+    for (const [action, weight] of this.weights) {
+      let target = 0;
+      if (action === gesture) target = 1;
+      else if (action === this.base) target = gesture ? 0 : 1;
+      const next = weight + (target - weight) * k;
+      this.weights.set(action, next);
+      action.setEffectiveWeight(next);
+      if (next < 0.005 && action !== this.base && action !== this.oneShot) {
+        action.stop();
+      }
+    }
+
     out.set(0, 0, 0);
     let total = 0;
     for (const action of this.actions.values()) {
-      if (!action.isRunning()) continue;
-      const w = action.getEffectiveWeight();
-      if (w <= 0.001) continue;
+      const w = this.weights.get(action) ?? 0;
+      if (w <= 0.001 || !action.isRunning()) continue;
       if (this.rootAt(action, _hipsTmp)) {
         out.x += _hipsTmp.x * w;
         out.y += _hipsTmp.y * w;
