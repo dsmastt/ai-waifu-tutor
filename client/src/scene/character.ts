@@ -72,6 +72,7 @@ export class TutorCharacter {
   private restWorld = new Map<THREE.Bone, THREE.Quaternion>();
   private restArmDirs = new Map<string, THREE.Vector3>();
   private armLengths = new Map<string, number>();
+  private headForwardLocal: THREE.Vector3 | null = null;
   private forward = new THREE.Vector3(0, 0, 1);
   private right = new THREE.Vector3(-1, 0, 0);
   private hasExpression = new Map<string, boolean>();
@@ -167,6 +168,12 @@ export class TutorCharacter {
       hips.getWorldQuaternion(_q);
       this.forward.set(0, 0, 1).applyQuaternion(_q).setY(0).normalize();
       this.right.crossVectors(this.forward, UP).normalize();
+    }
+    // the head's forward axis in its own local frame (for delta gaze)
+    const headBone = this.bone('head');
+    const restHead = headBone && this.restWorld.get(headBone);
+    if (restHead) {
+      this.headForwardLocal = this.forward.clone().applyQuaternion(restHead.clone().invert());
     }
   }
 
@@ -941,6 +948,40 @@ export class TutorCharacter {
     const yaw = this.curYaw + this.headOffset.yaw;
     const pitch = this.curPitch + this.headOffset.pitch;
     const roll = this.headOffset.roll;
+
+    const clipsActive =
+      !!this.clips && (this.clips.hasBase || this.clips.oneShotActive);
+
+    if (clipsActive) {
+      // apply gaze as a world-space delta ON TOP of the animated head/neck,
+      // so clip head motion (nods, shakes, glances) survives while she still
+      // looks at the player/windows
+      const aim = _deltaDir
+        .copy(this.forward)
+        .applyQuaternion(_q.setFromEuler(new THREE.Euler(this.curPitch, this.curYaw, 0, 'YXZ')));
+      const offset = _qLayered.setFromEuler(
+        new THREE.Euler(this.headOffset.pitch, this.headOffset.yaw, this.headOffset.roll, 'YXZ'),
+      );
+      if (head && this.headForwardLocal) {
+        const curW = head.getWorldQuaternion(new THREE.Quaternion());
+        const curF = _deltaDir2.copy(this.headForwardLocal).applyQuaternion(curW);
+        const delta = fromToQuat(curF, aim, _qFromTo).clone();
+        const desired = curW.clone().premultiply(delta).premultiply(offset);
+        this.setBoneWorldRotation(head, desired);
+      }
+      if (neck) {
+        const curN = neck.getWorldQuaternion(new THREE.Quaternion());
+        const curNF = _deltaDir2.copy(this.headForwardLocal ?? this.forward).applyQuaternion(curN);
+        const deltaN = fromToQuat(curNF, aim, _qFromTo).clone();
+        const halfN = new THREE.Quaternion().slerpQuaternions(
+          new THREE.Quaternion(),
+          deltaN,
+          0.5,
+        );
+        this.setBoneWorldRotation(neck, curN.clone().premultiply(halfN));
+      }
+      return;
+    }
 
     if (neck) {
       const rest = this.restWorld.get(neck);
