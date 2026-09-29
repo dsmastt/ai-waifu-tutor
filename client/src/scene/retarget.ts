@@ -76,6 +76,7 @@ export function retargetMixamoClip(
   fbxRoot: THREE.Object3D,
   srcClip: THREE.AnimationClip,
   targetBones: Map<string, THREE.Bone>,
+  targetBindWorld: Map<string, THREE.Quaternion>,
   rootCorrectionDeg = 0,
 ): RetargetResult | null {
   fbxRoot.updateMatrixWorld(true);
@@ -154,7 +155,8 @@ export function retargetMixamoClip(
   }
   const tgtBind = new Map<TgtBone, THREE.Quaternion>();
   for (const t of tgtList) {
-    tgtBind.set(t, t.bone.getWorldQuaternion(new THREE.Quaternion()));
+    const bind = targetBindWorld.get(t.name);
+    tgtBind.set(t, bind ? bind.clone() : t.bone.getWorldQuaternion(new THREE.Quaternion()));
   }
 
   const rootCorrection = _q.setFromAxisAngle(_axis.set(0, 1, 0), THREE.MathUtils.degToRad(rootCorrectionDeg));
@@ -239,12 +241,15 @@ export function retargetMixamoClip(
     }
   }
 
-  // build tracks
+  // build tracks (named after the target bones' actual node names so an
+  // AnimationMixer on the model root can bind them directly)
   const tracks: THREE.KeyframeTrack[] = [];
   for (const tgt of tgtList) {
     const arr = samples.get(tgt.name);
     if (!arr) continue;
-    tracks.push(new THREE.QuaternionKeyframeTrack(`${tgt.name}.quaternion`, times.slice(), arr));
+    tracks.push(
+      new THREE.QuaternionKeyframeTrack(`${tgt.bone.name}.quaternion`, times.slice(), arr),
+    );
   }
 
   // hips root motion (kept so feet plant correctly: the source hips carry

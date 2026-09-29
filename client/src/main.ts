@@ -98,7 +98,8 @@ async function loadAnimations(): Promise<void> {
     if (!res.ok) return;
     const manifest = (await res.json()) as AnimManifest;
     const fbx = new FBXLoader();
-    const bones = character.getNormalizedBones();
+    const bones = character.getRawBones();
+    const bind = character.getRawBind();
 
     const loadOne = async (
       name: string,
@@ -113,6 +114,7 @@ async function loadAnimations(): Promise<void> {
           root,
           clip,
           bones,
+          bind,
           entry.rootCorrection ?? 0,
         );
         if (!result) {

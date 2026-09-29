@@ -105,6 +105,7 @@ export class TutorCharacter {
 
   // animation clips (Mixamo, optional)
   clips: ClipLibrary | null = null;
+  private rawBind = new Map<string, THREE.Quaternion>();
   private speaking = false;
   private idleVariantTimer = 14;
 
@@ -122,7 +123,10 @@ export class TutorCharacter {
   async load(url: string): Promise<void> {
     const loader = new GLTFLoader();
     loader.crossOrigin = 'anonymous';
-    loader.register((parser) => new VRMLoaderPlugin(parser));
+    loader.register(
+      (parser) =>
+        new VRMLoaderPlugin(parser, { autoUpdateHumanBones: false }),
+    );
     const gltf = await loader.loadAsync(url);
     VRMUtils.removeUnnecessaryJoints(gltf.scene);
     const vrm = gltf.userData.vrm as VRM;
@@ -144,17 +148,15 @@ export class TutorCharacter {
     // disable the VRM's own look-at; we drive gaze procedurally
     (vrm as unknown as { lookAt: unknown }).lookAt = null;
 
-    // animation clips drive the NORMALIZED skeleton; three-vrm copies it to
-    // the raw skeleton every update (autoUpdateHumanBones defaults true).
-    // Rename the normalized nodes to VRM bone names so AnimationMixer can
-    // bind tracks (their shipped names are "Normalized_*").
-    for (const [name, b] of Object.entries(vrm.humanoid!.normalizedHumanBones)) {
-      if (b.node) b.node.name = name;
-    }
-    this.clips = new ClipLibrary(vrm.humanoid!.normalizedHumanBonesRoot!);
+    // animations and procedural poses both drive the RAW skeleton directly
+    // (autoUpdateHumanBones is off; the normalized-rig conjugation would
+    // re-frame every rotation and distort poses)
+    vrm.scene.updateMatrixWorld(true);
+    this.clips = new ClipLibrary(vrm.scene);
 
     this.captureBones();
     this.captureExpressions();
+    this.captureRawBind();
 
     // forward direction from the hips
     const hips = this.bone('hips');
@@ -167,14 +169,13 @@ export class TutorCharacter {
 
   private captureBones(): void {
     const vrm = this.vrm!;
-    vrm.humanoid!.normalizedHumanBonesRoot!.updateMatrixWorld(true);
     const names = [
       'hips', 'spine', 'chest', 'neck', 'head',
       'leftUpperArm', 'leftLowerArm', 'leftHand',
       'rightUpperArm', 'rightLowerArm', 'rightHand',
     ] as const;
     for (const n of names) {
-      const node = vrm.humanoid!.getNormalizedBoneNode(
+      const node = vrm.humanoid!.getRawBoneNode(
         VRMHumanBoneName[
           n.charAt(0).toUpperCase() + n.slice(1) as keyof typeof VRMHumanBoneName
         ],
@@ -295,15 +296,32 @@ export class TutorCharacter {
     }
   }
 
-  getNormalizedBones(): Map<string, THREE.Bone> {
+  /** VRM name -> raw bone map, for the animation retargeter. */
+  getRawBones(): Map<string, THREE.Bone> {
     const out = new Map<string, THREE.Bone>();
     const humanoid = this.vrm?.humanoid;
     if (!humanoid) return out;
-    for (const [name, bone] of Object.entries(humanoid.normalizedHumanBones)) {
-      const node = (bone as { node?: THREE.Bone }).node;
+    for (const name of Object.keys(humanoid.rawHumanBones)) {
+      const node = humanoid.getRawBoneNode(name as never) as THREE.Bone | null;
       if (node) out.set(name, node);
     }
     return out;
+  }
+
+  /** VRM name -> bind world quaternion (captured at rest, before any pose). */
+  getRawBind(): Map<string, THREE.Quaternion> {
+    return this.rawBind;
+  }
+
+  private captureRawBind(): void {
+    const humanoid = this.vrm?.humanoid;
+    if (!humanoid) return;
+    for (const name of Object.keys(humanoid.rawHumanBones)) {
+      const node = humanoid.getRawBoneNode(name as never) as THREE.Bone | null;
+      if (node) {
+        this.rawBind.set(name, node.getWorldQuaternion(new THREE.Quaternion()));
+      }
+    }
   }
 
   setViseme(v: string, weight: number): void {
