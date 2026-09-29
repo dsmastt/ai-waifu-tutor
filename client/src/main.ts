@@ -430,10 +430,14 @@ world.onFrame(({ dt }) => {
   if (vis) character.setViseme(vis.v, vis.weight);
   else character.setViseme('', 0);
 
-  // natural hand gestures + warm micro-smiles while explaining
+  // natural hand gestures + warm micro-smiles while explaining. The
+  // procedural talk gesture only runs without clips - during the talking
+  // clip the mixer already animates her arms, and the procedural pose
+  // would fight it frame to frame (twitching)
   const now = performance.now() / 1000;
   if (speaking) {
-    if (now - lastTalkGesture > 7 + Math.random() * 9) {
+    const hasClips = !!character.clips && character.clips.hasBase;
+    if (!hasClips && now - lastTalkGesture > 7 + Math.random() * 9) {
       lastTalkGesture = now;
       character.playGesture('talk');
     }

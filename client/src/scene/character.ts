@@ -530,15 +530,18 @@ export class TutorCharacter {
         this.lookAroundTimer = 5 + Math.random() * 8;
       }
     }
-    // subtle idle gestures when not doing anything else
+    // subtle idle gestures when not doing anything else. Procedural arm
+    // gestures only run when no clips exist - during clips the mixer owns
+    // the arms and a procedural pose would fight it (twitching)
     if (!this.gesture) {
       this.idleGestureTimer -= dt;
       if (this.idleGestureTimer <= 0) {
         this.idleGestureTimer = 10 + Math.random() * 16;
+        const clipsLoaded = !!this.clips && this.clips.hasBase;
         const r = Math.random();
         if (r < 0.3) this.playGesture('nod');
-        else if (r < 0.5) this.playGesture('talk');
-        else if (r < 0.56) this.playGesture('stretch');
+        else if (r < 0.5 && !clipsLoaded) this.playGesture('talk');
+        else if (r < 0.56 && !clipsLoaded) this.playGesture('stretch');
       }
     }
   }
