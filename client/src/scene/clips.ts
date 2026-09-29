@@ -131,9 +131,12 @@ export class ClipLibrary {
   playOneShot(name: string, duration = 0.25): boolean {
     const action = this.pick(name);
     if (!action || action === this.base) return false;
-    // already playing? let it finish instead of restarting (restarts mid-play
-    // snap the pose back to frame 0)
-    if (this.oneShot === action && action.isRunning()) return true;
+    // don't interrupt an in-flight one-shot (except near its end): stopping
+    // and restarting mid-transition every few hundred ms is the twitch
+    if (this.oneShot && this.oneShot.isRunning()) {
+      const dur = Math.max(this.oneShot.getClip().duration, 0.1);
+      if (this.oneShot.time < dur * 0.7) return true;
+    }
     this.trace(`oneShot ${name}`);
     if (this.oneShot && this.oneShot !== action && this.oneShot.isRunning()) {
       this.oneShot.stop();

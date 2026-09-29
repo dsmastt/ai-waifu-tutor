@@ -121,6 +121,9 @@ export class TutorCharacter {
   private listenLean = 0;
   private groundBias = 0;
   private leanFixPitch = 0;
+  private lastGestureAt = 0;
+  private lastExprName = '';
+  private lastExprAt = 0;
   private leanFixRoll = 0;
 
   // breath
@@ -238,6 +241,11 @@ export class TutorCharacter {
 
   setExpression(name: string, intensity = 1): void {
     const key = name.toLowerCase();
+    // debounce expression changes: rapid alternation makes the face flap
+    const nowS = performance.now() / 1000;
+    if (key !== this.lastExprName && nowS - this.lastExprAt < 0.7) return;
+    this.lastExprName = key;
+    this.lastExprAt = nowS;
     const presets = EXPRESSION_PRESETS[key] ?? [];
     const mult = Math.max(0, Math.min(1, intensity));
     for (const p of presets) {
@@ -276,6 +284,11 @@ export class TutorCharacter {
   }
 
   playGesture(name: string, target?: THREE.Vector3 | null): void {
+    // rate limit: bursty action streams (the LLM emits several gestures per
+    // second) would interrupt every transition mid-flight and thrash
+    const nowS = performance.now() / 1000;
+    if (nowS - this.lastGestureAt < 1.0) return;
+    this.lastGestureAt = nowS;
     // Mixamo one-shot when available (pointing keeps its procedural aim
     // because the clip can't target an arbitrary window)
     const clipName: Record<string, string> = {
@@ -533,7 +546,7 @@ export class TutorCharacter {
     // subtle idle gestures when not doing anything else. Procedural arm
     // gestures only run when no clips exist - during clips the mixer owns
     // the arms and a procedural pose would fight it (twitching)
-    if (!this.gesture) {
+    if (!this.gesture && !this.speaking) {
       this.idleGestureTimer -= dt;
       if (this.idleGestureTimer <= 0) {
         this.idleGestureTimer = 10 + Math.random() * 16;
@@ -602,7 +615,9 @@ export class TutorCharacter {
     const yaw = Math.atan2(dir.x, dir.z) - Math.atan2(this.forward.x, this.forward.z);
     head.getWorldPosition(_v);
     const full = target.clone().sub(_v).normalize();
-    const pitch = Math.asin(THREE.MathUtils.clamp(full.y, -1, 1));
+    // X-axis rotations tilt +Z-forward downward for positive angles, so a
+    // target above the head needs a NEGATIVE pitch
+    const pitch = -Math.asin(THREE.MathUtils.clamp(full.y, -1, 1));
     return new THREE.Vector2(yaw, pitch);
   }
 
