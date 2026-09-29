@@ -38,9 +38,12 @@ const _tmpQuatSmooth = new THREE.Quaternion();
 const _qFromTo = new THREE.Quaternion();
 const _qTwist = new THREE.Quaternion();
 const _qLayered = new THREE.Quaternion();
+const _qOutward = new THREE.Quaternion();
 const _deltaDir = new THREE.Vector3();
 const _deltaDir2 = new THREE.Vector3();
 const _rootTmp = new THREE.Vector3();
+const _zAxis = new THREE.Vector3(0, 0, 1);
+const _xAxis = new THREE.Vector3(1, 0, 0);
 const _v = new THREE.Vector3();
 const _axis = new THREE.Vector3();
 const _tmpA = new THREE.Vector3();
@@ -169,6 +172,9 @@ export class TutorCharacter {
 
   private captureBones(): void {
     const vrm = this.vrm!;
+    // ensure the scaled/positioned world matrices are current before
+    // measuring bone offsets (otherwise lengths come out in native units)
+    vrm.scene.updateMatrixWorld(true);
     const names = [
       'hips', 'spine', 'chest', 'neck', 'head',
       'leftUpperArm', 'leftLowerArm', 'leftHand',
@@ -405,11 +411,18 @@ export class TutorCharacter {
     for (const side of ['left', 'right'] as const) {
       const upper = this.bone(`${side}UpperArm`);
       if (!upper) continue;
-      upper.getWorldQuaternion(_q);
-      const amp = (side === 'left' ? sway : -sway) * 0.7;
-      const desired = _q
-        .clone()
-        .multiply(_qLayered.setFromEuler(new THREE.Euler(amp, 0, breath * 0.4)));
+      // constant outward + slight-forward bias (hands clear the hips) plus
+      // sway and breath, composed as world-space premultiplications
+      const outward = _qLayered.setFromAxisAngle(_zAxis, side === 'left' ? 0.2 : -0.2);
+      const forward = _qOutward.setFromAxisAngle(_xAxis, -0.07);
+      const wobble = _qTwist.setFromEuler(
+        new THREE.Euler((side === 'left' ? sway : -sway) * 0.7, 0, breath * 0.4),
+      );
+      const desired = upper
+        .getWorldQuaternion(new THREE.Quaternion())
+        .premultiply(outward)
+        .premultiply(forward)
+        .multiply(wobble);
       this.smoothTo(upper, desired, dt, 7);
     }
   }
@@ -832,9 +845,11 @@ export class TutorCharacter {
       curUpperDir.set(0, -1, 0);
     }
     curUpperDir.normalize();
+    // world-space delta must PREmultiply the world orientation (applying it
+    // post-multiply would rotate around the bone's local axes instead)
     const desiredUpper = upperWorld
       .clone()
-      .multiply(fromToQuat(curUpperDir, dir, _qFromTo));
+      .premultiply(fromToQuat(curUpperDir, dir, _qFromTo));
     if (weight < 1) desiredUpper.slerp(upperWorld, 1 - weight);
 
     let ldir: THREE.Vector3;
@@ -855,14 +870,17 @@ export class TutorCharacter {
     curLowerDir.normalize();
     const desiredLower = lowerWorld
       .clone()
-      .multiply(fromToQuat(curLowerDir, ldir, _qFromTo));
+      .premultiply(fromToQuat(curLowerDir, ldir, _qFromTo));
     if (lowerTwist !== 0) {
-      desiredLower.multiply(_qTwist.setFromAxisAngle(ldir, lowerTwist));
+      desiredLower.premultiply(_qTwist.setFromAxisAngle(ldir, lowerTwist));
     }
     if (weight < 1) desiredLower.slerp(lowerWorld, 1 - weight);
 
-    this.smoothTo(upper, desiredUpper, dt);
-    this.smoothTo(lower, desiredLower, dt);
+    // write directly: when clips play, the mixer rewrites the bones every
+    // frame, so frame-rate smoothing can never accumulate - the gesture's
+    // own ease-in/out provides the smoothness instead
+    this.setBoneWorldRotation(upper, desiredUpper);
+    this.setBoneWorldRotation(lower, desiredLower);
   }
 
   private smoothTo(bone: THREE.Bone, desired: THREE.Quaternion, dt: number, rate = 9): void {
