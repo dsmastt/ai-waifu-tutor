@@ -7,7 +7,7 @@ export PATH="$HOME/.local/node/bin:$HOME/.local/bin:$PATH"
 
 trap 'kill 0' EXIT
 
-if [ ! -f "$ROOT/client/public/models/Seed-san.vrm" ]; then
+if [ ! -f "$ROOT/client/public/models/nikechan_v2.vrm" ]; then
   echo "Avatar model missing - fetching assets..."
   "$ROOT/scripts/fetch-assets.sh"
 fi

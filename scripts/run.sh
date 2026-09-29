@@ -6,7 +6,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export PATH="$HOME/.local/node/bin:$HOME/.local/bin:$PATH"
 
-if [ ! -f "$ROOT/client/public/models/Seed-san.vrm" ]; then
+if [ ! -f "$ROOT/client/public/models/nikechan_v2.vrm" ]; then
   echo "Avatar model missing - fetching assets..."
   "$ROOT/scripts/fetch-assets.sh"
 fi

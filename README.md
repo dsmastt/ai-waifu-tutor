@@ -48,6 +48,11 @@ cd server && uv sync && uv run uvicorn app.main:app --port 8000   # server
 cd client && npm install && npm run dev                            # client (dev)
 ```
 
+## Avatar
+
+Nike-chan (VRM 1.0, official terms at tegnike/nikechan-assets:
+personal use permitted, the model itself is not redistributed).
+
 ## Features
 
 - 3D anime tutor (VRM 1.0) with procedural idle life: blinking, breathing,

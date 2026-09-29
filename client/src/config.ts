@@ -1,4 +1,4 @@
-export const MODEL_PATH = '/models/Seed-san.vrm';
+export const MODEL_PATH = '/models/nikechan_v2.vrm';
 
 export function wsUrl(): string {
   const param = new URLSearchParams(location.search).get('ws');

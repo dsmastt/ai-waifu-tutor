@@ -400,10 +400,10 @@ export class TutorCharacter {
     if (!Number.isFinite(minFoot)) return;
     const localFoot = minFoot - this.group.position.y;
     this.footSamples.push(localFoot);
-    if (this.footSamples.length > 120) this.footSamples.shift();
+    if (this.footSamples.length > 60) this.footSamples.shift();
     const lowest = Math.min(...this.footSamples);
     const target = THREE.MathUtils.clamp(0.008 - lowest, -0.25, 0.25);
-    this.groundBias += (target - this.groundBias) * Math.min(1, dt * 5);
+    this.groundBias += (target - this.groundBias) * Math.min(1, dt * 8);
   }
 
   private updateClipGestures(dt: number): void {
